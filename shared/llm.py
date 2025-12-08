@@ -1,45 +1,45 @@
 import json
 import os
-from copy import deepcopy
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from openai import OpenAI
 
 
-def _ensure_additional_properties_false(schema: Dict[str, Any]) -> Dict[str, Any]:
-    def _normalize(node: Any) -> Any:
-        if not isinstance(node, dict):
-            return node
+def _extract_json_block(text: str) -> str:
+    fenced = re.search(r"```json\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
+    if fenced:
+        return fenced.group(1)
 
-        normalized_node = dict(node)
+    generic_fenced = re.search(r"```\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
+    if generic_fenced:
+        return generic_fenced.group(1)
 
-        if "properties" in normalized_node and isinstance(normalized_node["properties"], dict):
-            normalized_node["properties"] = {
-                key: _normalize(value) for key, value in normalized_node["properties"].items()
-            }
+    return text.strip()
 
-        if "items" in normalized_node:
-            normalized_node["items"] = _normalize(normalized_node["items"])
 
-        for key in ("anyOf", "oneOf", "allOf"):
-            if key in normalized_node and isinstance(normalized_node[key], list):
-                normalized_node[key] = [_normalize(option) for option in normalized_node[key]]
+def _normalize_json_output(raw_text: str, json_schema: Optional[Dict[str, Any]]) -> str:
+    json_text = _extract_json_block(raw_text)
+    try:
+        parsed = json.loads(json_text)
+    except json.JSONDecodeError as exc:
+        print(f"[LLM] Failed to parse JSON: {exc}; raw text: {raw_text!r}")
+        raise
 
-        if isinstance(normalized_node.get("additionalProperties"), dict):
-            normalized_node["additionalProperties"] = _normalize(normalized_node["additionalProperties"])
+    if not json_schema:
+        return json.dumps(parsed, separators=(",", ":"))
 
-        if (
-            normalized_node.get("type") == "object"
-            or "properties" in normalized_node
-            or "required" in normalized_node
-            or "additionalProperties" in normalized_node
-        ) and "additionalProperties" not in normalized_node:
-            normalized_node["additionalProperties"] = False
+    properties = json_schema.get("properties") or {}
+    if isinstance(properties, dict) and properties:
+        parsed_obj = parsed if isinstance(parsed, dict) else {}
+        normalized: Dict[str, Any] = {key: parsed_obj.get(key) for key in properties}
+        for key in properties:
+            if key not in normalized:
+                normalized[key] = None
+        return json.dumps(normalized, separators=(",", ":"))
 
-        return normalized_node
-
-    return _normalize(deepcopy(schema))
+    return json.dumps(parsed, separators=(",", ":"))
 
 
 @dataclass
@@ -63,32 +63,28 @@ class OpenAILLM:
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
-        text_format: Dict[str, Any] | None = None
         if json_schema:
-            normalized_schema = _ensure_additional_properties_false(json_schema)
-            text_format = {
-                "format": {
-                    "type": "json_schema",
-                    "name": "response_schema",
-                    "schema": normalized_schema,
-                    "strict": True,
-                }
-            }
-        completion = self._client.responses.create(
+            schema_props = list(json_schema.get("properties", {}).keys())
+            keys_text = ", ".join(schema_props) if schema_props else "the specified schema keys"
+            schema_instruction = (
+                "Respond with a single JSON object. Include only the following keys: "
+                f"{keys_text}. Use null for any unknown values. Do not include any extra text."
+            )
+            messages.append({"role": "system", "content": schema_instruction})
+
+        response_format: Dict[str, str] | None = None
+        if json_schema:
+            response_format = {"type": "json_object"}
+
+        completion = self._client.chat.completions.create(
             model=self.model,
-            input=messages,
+            messages=messages,
             temperature=self.temperature,
-            max_output_tokens=self.max_tokens,
-            text=text_format,
+            max_tokens=self.max_tokens,
+            response_format=response_format,
         )
-        content = completion.output[0].content[0].text
-        if text_format:
-            try:
-                # Ensure JSON string to keep downstream parsing predictable.
-                json.loads(content)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"LLM did not return valid JSON: {exc}") from exc
-        return content
+        content = completion.choices[0].message.content or ""
+        return _normalize_json_output(content, json_schema)
 
 
 def get_default_llm() -> OpenAILLM:
