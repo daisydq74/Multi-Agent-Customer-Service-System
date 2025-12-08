@@ -17,8 +17,9 @@ def build_request(prompt: str) -> dict:
     return {"jsonrpc": "2.0", "id": "demo", "method": "message/send", "params": params.model_dump()}
 
 
-def print_response(prompt: str, result: dict | None) -> None:
-    print(f"=== Prompt: {prompt} ===")
+def print_response(scenario: str, prompt: str, result: dict | None) -> None:
+    print(f"=== Scenario: {scenario} ===")
+    print(f"Prompt: {prompt}")
     if not result:
         print("No result returned")
     else:
@@ -27,21 +28,21 @@ def print_response(prompt: str, result: dict | None) -> None:
 
 
 async def main():
-    prompts = [
-        "Customer 1 billing summary and next payment guidance",
-        "Customer 2 has login problems, what should support do?",
-        "Customer history then support guidance",
-        "Open a new high-priority ticket for customer 3 about shipment delay",
-        "List recent active customers and suggest a follow-up action",
+    test_scenarios = [
+        ("Simple Query", "Get customer information for ID 5"),
+        ("Coordinated Query", "I'm customer 12345 and need help upgrading my account"),
+        ("Complex Query", "Show me all active customers who have open tickets"),
+        ("Escalation", "I've been charged twice, please refund immediately!"),
+        ("Multi-Intent", "Update my email to new@email.com and show my ticket history"),
     ]
 
     async with httpx.AsyncClient() as client:
-        for prompt in prompts:
+        for scenario, prompt in test_scenarios:
             request_body = build_request(prompt)
             response = await client.post(ROUTER_RPC, json=request_body)
             response.raise_for_status()
             result = response.json().get("result")
-            print_response(prompt, result)
+            print_response(scenario, prompt, result)
 
 
 if __name__ == "__main__":
