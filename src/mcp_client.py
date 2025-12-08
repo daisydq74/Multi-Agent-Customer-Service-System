@@ -5,7 +5,7 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class MCPClient:
     """Async MCP client that manages a stdio subprocess."""
 
-    def __init__(self, command: Optional[List[str]] = None) -> None:
+    def __init__(self, command: Optional[Union[str, List[str]]] = None) -> None:
         self.command = command or ["python", "-m", "mcp_server.server"]
         self._client = None
         self._session: Optional[ClientSession] = None
@@ -27,7 +27,19 @@ class MCPClient:
         async with self._lock:
             if self._session is not None:
                 return
-            params = StdioServerParameters(command=self.command, env={"DB_PATH": os.getenv("DB_PATH", "./support.db")})
+            cmd = self.command or "python"
+            if isinstance(cmd, (list, tuple)):
+                command = cmd[0]
+                args = list(cmd[1:])
+            else:
+                command = cmd
+                args = ["-m", "mcp_server.server"]
+
+            params = StdioServerParameters(
+                command=command,
+                args=args,
+                env={"DB_PATH": os.getenv("DB_PATH", "./support.db")},
+            )
             self._client = await stdio_client(params)
             self._session = ClientSession(self._client)
             await self._session.__aenter__()
