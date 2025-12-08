@@ -38,31 +38,47 @@ def generate_text(system_prompt: str, user_prompt: str, temperature: float = 0.2
 
     client = OpenAI(api_key=api_key)
 
-    try:
-        if mode == "responses":
-            response = client.responses.create(
-                model=model,
-                input=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=temperature,
+    def _with_temperature_retry(callable_fn, kwargs):
+        try:
+            return callable_fn(**kwargs)
+        except Exception as exc:
+            message = str(exc)
+            is_temp_error = (
+                getattr(exc, "status_code", None) == 400
+                and "Unsupported parameter: 'temperature' is not supported" in message
             )
-            if hasattr(response, "output"):
-                rendered = _render_responses_output(response.output) or str(response)
-                return rendered
-            return str(response)
+            if is_temp_error and "temperature" in kwargs:
+                logger.warning(
+                    "OpenAI backend does not support temperature; retrying without it"
+                )
+                kwargs_no_temp = {k: v for k, v in kwargs.items() if k != "temperature"}
+                return callable_fn(**kwargs_no_temp)
+            logger.error("LLM generation failed: %s", exc)
+            raise
 
-        # Default to chat completions for compatibility
-        chat = client.chat.completions.create(
-            model=model,
-            messages=[
+    if mode == "responses":
+        kwargs = {
+            "model": model,
+            "input": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=temperature,
-        )
-        return chat.choices[0].message.content or ""
-    except Exception as exc:  # pragma: no cover - safety net for demo stability
-        logger.error("LLM generation failed: %s", exc)
-        return f"[fallback-error] {user_prompt}\nreason={exc}"
+            "temperature": temperature,
+        }
+        response = _with_temperature_retry(client.responses.create, kwargs)
+        if hasattr(response, "output"):
+            rendered = _render_responses_output(response.output) or str(response)
+            return rendered
+        return str(response)
+
+    # Default to chat completions for compatibility
+    kwargs = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": temperature,
+    }
+    chat = _with_temperature_retry(client.chat.completions.create, kwargs)
+    return chat.choices[0].message.content or ""

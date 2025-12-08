@@ -31,14 +31,20 @@ def _card(agent: Any, path: str) -> Dict[str, Any]:
 
 async def _handle_rpc(agent: Any, request: Request) -> Dict[str, Any]:
     body = await request.json()
+    req_id = body.get("id")
     if body.get("method") != "message/send":
         raise HTTPException(status_code=400, detail="Only message/send supported")
     params = body.get("params") or {}
     try:
         result = await agent.handle_message(params)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"jsonrpc": "2.0", "id": body.get("id"), "result": result}
+        return {"jsonrpc": "2.0", "id": req_id, "result": result}
+    except Exception as exc:  # pragma: no cover - ensure HTTP layer stability
+        logger.error("Agent error for %s: %s", getattr(agent, "name", agent), exc)
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "error": {"code": -32000, "message": str(exc)},
+        }
 
 
 @app.get("/a2a/router")

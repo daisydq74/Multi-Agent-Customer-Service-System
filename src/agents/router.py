@@ -14,12 +14,15 @@ logger = logging.getLogger(__name__)
 
 
 def _extract_customer_id(text: str) -> Optional[int]:
-    match = re.search(r"customer\s*(?:id|#)?\s*(\d+)", text, re.IGNORECASE)
-    if match:
-        return int(match.group(1))
-    digits = re.findall(r"\b(\d{3,})\b", text)
-    if digits:
-        return int(digits[0])
+    patterns = [
+        r"\b(?:customer\s*)?id\b\s*[:#]?\s*(\d+)\b",
+        r"\bID\b\s*[:#]?\s*(\d+)\b",
+        r"\b(\d{3,})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
     return None
 
 
@@ -63,6 +66,9 @@ class RouterAgent:
         async def call_data(operation: str, args: Dict[str, Any]) -> Any:
             payload = self._rpc_payload(user_message, {"operation": operation, "args": args})
             response = await send_json_rpc("Router", "CustomerData", self.data_endpoint, payload)
+            if "error" in response:
+                logger.error("Data agent error: %s", response["error"])
+                return {"error": response["error"]}
             return response.get("result", {}).get("context", {}).get("result")
 
         # Route based on action
@@ -75,7 +81,7 @@ class RouterAgent:
                     history = await call_data("get_history", {"customer_id": customer_id})
                     data_context.append({"history": history})
             else:
-                data_context.append({"error": "customer_id missing"})
+                return {"message": "Please provide a customer ID to continue."}
 
         elif plan["action"] == "upgrade_help":
             customer_id = plan.get("customer_id") or _extract_customer_id(user_message)
@@ -136,6 +142,9 @@ class RouterAgent:
             },
         )
         support_reply = await send_json_rpc("Router", "Support", self.support_endpoint, support_payload)
+        if "error" in support_reply:
+            logger.error("Support agent error: %s", support_reply["error"])
+            return {"error": support_reply["error"]}
         return support_reply.get("result") or {}
 
     def _rpc_payload(self, message_content: str, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -183,6 +192,12 @@ class RouterAgent:
             email = _extract_email(user_message)
             if email:
                 plan["update"]["email"] = email
+        if plan.get("customer_id") is None:
+            extracted = _extract_customer_id(user_message)
+            if extracted is not None:
+                plan["customer_id"] = extracted
+        elif isinstance(plan.get("customer_id"), str) and plan.get("customer_id").isdigit():
+            plan["customer_id"] = int(plan["customer_id"])
         return plan
 
     def _infer_action(self, user_message: str) -> str:

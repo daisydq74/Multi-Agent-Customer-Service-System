@@ -16,8 +16,17 @@ async def send_json_rpc(from_agent: str, to_agent: str, endpoint: str, payload: 
     logger.info("[A2A] from=%s to=%s request=%s", from_agent, to_agent, pretty_request)
     async with httpx.AsyncClient() as client:
         response = await client.post(endpoint, json=payload, timeout=30.0)
-        response.raise_for_status()
-        data = response.json()
+        if response.status_code != 200:
+            data = {
+                "jsonrpc": "2.0",
+                "id": payload.get("id"),
+                "error": {
+                    "code": -32001,
+                    "message": f"HTTP {response.status_code}: {response.text}",
+                },
+            }
+        else:
+            data = response.json()
     pretty_response = json.dumps(data, indent=2)
     logger.info("[A2A] from=%s to=%s response=%s", from_agent, to_agent, pretty_response)
     return data

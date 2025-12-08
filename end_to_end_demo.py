@@ -36,8 +36,15 @@ async def _send_to_router(base_url: str, message: str) -> dict:
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(f"{base_url}/a2a/router", json=payload, timeout=60.0)
-        resp.raise_for_status()
-        return resp.json()
+        try:
+            data = resp.json()
+        except Exception:
+            data = {
+                "jsonrpc": "2.0",
+                "id": payload["id"],
+                "error": {"code": -32002, "message": f"Invalid response: {resp.text}"},
+            }
+        return data
 
 
 def _start_api_server(host: str, port: int) -> uvicorn.Server:
@@ -74,6 +81,11 @@ async def run_demo() -> None:
     for query in queries:
         logger.info("Sending query: %s", query)
         result = await _send_to_router(base_url, query)
+        if "error" in result:
+            logger.warning("Router returned error: %s", result["error"])
+            print(json.dumps(result, indent=2))
+            print("-" * 40)
+            continue
         logger.info("Result: %s", json.dumps(result, indent=2))
         print("-" * 40)
         print(f"Query: {query}")
