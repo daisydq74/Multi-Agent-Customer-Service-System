@@ -27,25 +27,25 @@ class OpenAILLM:
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
-        response_format: Dict[str, Any] | None = None
+        text_format: Dict[str, Any] | None = None
         if json_schema:
-            response_format = {
-                "type": "json_schema",
-                "json_schema": {
+            text_format = {
+                "format": {
+                    "type": "json_schema",
                     "name": "response_schema",
                     "schema": json_schema,
                     "strict": True,
-                },
+                }
             }
         completion = self._client.responses.create(
             model=self.model,
             input=messages,
             temperature=self.temperature,
             max_output_tokens=self.max_tokens,
-            response_format=response_format,
+            text=text_format,
         )
-        content = completion.output_text
-        if response_format:
+        content = completion.output[0].content[0].text
+        if text_format:
             try:
                 # Ensure JSON string to keep downstream parsing predictable.
                 json.loads(content)
