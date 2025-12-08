@@ -17,6 +17,21 @@ app = FastAPI(title="Assignment 5 MCP Server", version="1.0.0")
 event_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
 
 
+def normalize_priority(priority: Any) -> str:
+    if priority is None:
+        return "medium"
+
+    normalized = str(priority).strip().lower()
+    if normalized in {"high", "urgent", "critical", "immediate", "highest"}:
+        return "high"
+    if normalized in {"medium", "normal", "default"}:
+        return "medium"
+    if normalized == "low":
+        return "low"
+
+    return "medium"
+
+
 class ToolCallRequest(BaseModel):
     name: str
     arguments: Dict[str, Any]
@@ -116,11 +131,17 @@ async def call_tool(payload: ToolCallRequest) -> Dict[str, Any]:
         return {"result": updated}
 
     if name == "create_ticket":
+        try:
+            customer_id = int(args.get("customer_id"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid customer_id")
+
+        priority = normalize_priority(args.get("priority"))
         ticket = await asyncio.to_thread(
             create_ticket_record,
-            int(args.get("customer_id")),
+            customer_id,
             str(args.get("issue")),
-            str(args.get("priority")),
+            priority,
         )
         await _enqueue_event({"type": "ticket", "tool": name, "ticket_id": ticket["id"]})
         return {"result": ticket}
