@@ -7,8 +7,19 @@ from typing import Any, Dict, Iterable, List, Optional
 from database_setup import DatabaseSetup
 
 _db_setup = DatabaseSetup()
-_db_setup.initialize()
-DB_PATH: Path = _db_setup.db_path
+
+try:
+    _db_setup.connect()
+    _db_setup.create_tables()
+    _db_setup.create_triggers()
+
+    customer_count = _db_setup.conn.execute("SELECT COUNT(*) FROM customers").fetchone()[0]
+    if customer_count == 0:
+        _db_setup.insert_sample_data()
+finally:
+    _db_setup.close()
+
+DB_PATH: Path = Path(_db_setup.db_path)
 
 
 def _get_connection() -> sqlite3.Connection:
