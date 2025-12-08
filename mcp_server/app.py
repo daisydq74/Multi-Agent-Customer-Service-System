@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from mcp_server.db import (
+from .db import (
     create_ticket_record,
     fetch_customer,
     fetch_customers,
