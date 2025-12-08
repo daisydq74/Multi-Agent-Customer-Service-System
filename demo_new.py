@@ -99,13 +99,19 @@ async def main():
             ("Multi-Intent", "Update my email to new@email.com and show my ticket history"),
         ]
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             for scenario, prompt in test_scenarios:
                 request_body = build_request(prompt)
-                resp = await client.post(ROUTER_RPC, json=request_body)
-                resp.raise_for_status()
-                result = resp.json().get("result")
-                print_response(scenario, prompt, result)
+                try:
+                    resp = await client.post(ROUTER_RPC, json=request_body)
+                    if resp.status_code != 200:
+                        print(f"[demo] {scenario} request failed: status={resp.status_code} body={resp.text}")
+                        continue
+                    result = resp.json().get("result")
+                    print_response(scenario, prompt, result)
+                except httpx.HTTPError as exc:
+                    print(f"[demo] {scenario} request encountered an HTTP error: {exc}")
+                    continue
 
         print("\n[demo] Done.")
 
