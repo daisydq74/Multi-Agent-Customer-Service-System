@@ -1,4 +1,8 @@
-"""Run end-to-end A2A + MCP demo flows."""
+"""Run end-to-end A2A + MCP demo flows.
+
+Export ``OPENAI_MODEL="gpt-4o-mini"`` (or leave it unset to use this default). The
+OpenAI requests do not include a ``temperature`` parameter.
+"""
 from __future__ import annotations
 
 import asyncio
