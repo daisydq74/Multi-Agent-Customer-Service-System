@@ -1,0 +1,11 @@
+fastapi==0.123.0
+uvicorn==0.38.0
+sse-starlette==3.0.3
+aiosqlite==0.21.0
+fastmcp==2.13.2
+langgraph==1.0.4
+langchain-core==1.1.0
+orjson==3.11.4
+httpx==0.28.1
+python-dotenv==1.2.1
+langgraph-sdk==0.2.10
