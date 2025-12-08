@@ -80,9 +80,20 @@ class RouterAgent:
             "required": ["route", "customer_id", "data_task", "notes"],
             "additionalProperties": False,
         }
-        print(f"[Router] Calling LLM model={self.llm.model}")
-        raw = self.llm.complete(system=system, user=user, json_schema=schema)
-        parsed = json.loads(raw)
+        try:
+            raw = self.llm.complete(system=system, user=user, json_schema=schema)
+        except ValueError as exc:
+            return {
+                "route": "support",
+                "customer_id": None,
+                "data_task": None,
+                "notes": f"Routing failed to parse model response: {exc}",
+            }
+
+        if isinstance(raw, str):
+            parsed = json.loads(raw)
+        else:
+            parsed = raw
         return parsed
 
 

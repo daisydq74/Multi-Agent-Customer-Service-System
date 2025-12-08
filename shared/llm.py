@@ -16,30 +16,20 @@ def _extract_json_block(text: str) -> str:
     if generic_fenced:
         return generic_fenced.group(1)
 
+    bracketed = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if bracketed:
+        return bracketed.group(0)
+
     return text.strip()
 
 
-def _normalize_json_output(raw_text: str, json_schema: Optional[Dict[str, Any]]) -> str:
+def _parse_json_output(raw_text: str) -> Dict[str, Any]:
     json_text = _extract_json_block(raw_text)
     try:
-        parsed = json.loads(json_text)
-    except json.JSONDecodeError as exc:
-        print(f"[LLM] Failed to parse JSON: {exc}; raw text: {raw_text!r}")
-        raise
-
-    if not json_schema:
-        return json.dumps(parsed, separators=(",", ":"))
-
-    properties = json_schema.get("properties") or {}
-    if isinstance(properties, dict) and properties:
-        parsed_obj = parsed if isinstance(parsed, dict) else {}
-        normalized: Dict[str, Any] = {key: parsed_obj.get(key) for key in properties}
-        for key in properties:
-            if key not in normalized:
-                normalized[key] = None
-        return json.dumps(normalized, separators=(",", ":"))
-
-    return json.dumps(parsed, separators=(",", ":"))
+        return json.loads(json_text)
+    except json.JSONDecodeError:
+        preview = raw_text.strip().replace("\n", " ")[:300]
+        raise ValueError(f"Failed to parse JSON from model response. Preview: {preview}")
 
 
 @dataclass
@@ -56,13 +46,14 @@ class OpenAILLM:
                 "Set the environment variable and try again."
             )
         self._client = OpenAI(api_key=api_key)
-        print(f"[LLM] Initialized OpenAI client with model={self.model}")
 
-    def complete(self, system: str, user: str, *, json_schema: Optional[Dict[str, Any]] = None) -> str:
+    def complete(self, system: str, user: str, *, json_schema: Optional[Dict[str, Any]] = None) -> Any:
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
+
+        response_format: Dict[str, str] | None = None
         if json_schema:
             schema_props = list(json_schema.get("properties", {}).keys())
             keys_text = ", ".join(schema_props) if schema_props else "the specified schema keys"
@@ -71,9 +62,6 @@ class OpenAILLM:
                 f"{keys_text}. Use null for any unknown values. Do not include any extra text."
             )
             messages.append({"role": "system", "content": schema_instruction})
-
-        response_format: Dict[str, str] | None = None
-        if json_schema:
             response_format = {"type": "json_object"}
 
         completion = self._client.chat.completions.create(
@@ -84,7 +72,12 @@ class OpenAILLM:
             response_format=response_format,
         )
         content = completion.choices[0].message.content or ""
-        return _normalize_json_output(content, json_schema)
+
+        if not json_schema:
+            return content.strip()
+
+        parsed = _parse_json_output(content)
+        return parsed
 
 
 def get_default_llm() -> OpenAILLM:

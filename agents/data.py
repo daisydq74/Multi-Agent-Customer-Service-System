@@ -59,9 +59,14 @@ class CustomerDataAgent:
             },
             ensure_ascii=False,
         )
-        print(f"[CustomerData] Calling LLM model={self.llm.model}")
-        raw = self.llm.complete(system=system, user=user, json_schema=self._tool_schema())
-        return json.loads(raw)
+        try:
+            raw = self.llm.complete(system=system, user=user, json_schema=self._tool_schema())
+        except ValueError as exc:
+            raise ValueError(f"Tool decision parsing failed: {exc}") from exc
+
+        if isinstance(raw, str):
+            return json.loads(raw)
+        return raw
 
     async def _summarize(self, tool_decision: Dict[str, Any], tool_result: Any) -> Dict[str, Any]:
         system = (
@@ -87,7 +92,9 @@ class CustomerDataAgent:
             "additionalProperties": False,
         }
         raw = self.llm.complete(system=system, user=user, json_schema=schema)
-        return json.loads(raw)
+        if isinstance(raw, str):
+            return json.loads(raw)
+        return raw
 
     async def handle(self, task: Dict[str, Any]) -> Dict[str, Any]:
         user_message = task.get("user_message", "")
@@ -95,7 +102,15 @@ class CustomerDataAgent:
         decision: Dict[str, Any] | None = None
 
         for _ in range(2):
-            decision = await self._decide_tool(user_message, task, last_result)
+            try:
+                decision = await self._decide_tool(user_message, task, last_result)
+            except ValueError as exc:
+                return {
+                    "customer": None,
+                    "updates": None,
+                    "history": None,
+                    "raw_tool_result": {"error": str(exc)},
+                }
             if decision.get("needs_more_info"):
                 return {
                     "customer": None,
@@ -113,7 +128,15 @@ class CustomerDataAgent:
         if decision is None:
             return {"customer": None, "updates": None, "history": None, "raw_tool_result": None}
 
-        return await self._summarize(decision, last_result)
+        try:
+            return await self._summarize(decision, last_result)
+        except ValueError as exc:
+            return {
+                "customer": None,
+                "updates": None,
+                "history": None,
+                "raw_tool_result": {"error": f"Summary parsing failed: {exc}"},
+            }
 
 
 customer_data_agent = CustomerDataAgent()
