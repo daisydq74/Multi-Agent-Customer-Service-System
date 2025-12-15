@@ -1,0 +1,74 @@
+Connected to database: support.db
+Tables created successfully!
+Triggers created successfully!
+Database connection closed.
+MCP Server healthy at http://localhost:8000/health
+Data Agent healthy at http://localhost:8011/health
+Support Agent healthy at http://localhost:8012/health
+Billing Agent healthy at http://localhost:8013/health
+Router Agent healthy at http://localhost:8010/health
+
+=== Prompt: Get customer information for ID 5 ===
+Hi Charlie Brown, I pulled up your account details.
+Account status: active. Email on file: charlie.brown@email.com.
+Regarding your request: Get customer information for ID 5
+- If anything looks off, reply here and I'll take action right away.
+I'll stay on this until you're satisfied. Reply with any details you'd like me to handle now.
+
+A2A log:
+- Router -> Data: context sent
+- Data -> Router: Executed get_customer
+- Router -> Support: context sent
+- Support -> Router: response captured
+
+=== Prompt: I'm customer 5 and need help upgrading my account ===
+Hi Charlie Brown, I pulled up your account details.
+Account status: active. Email on file: charlie.brown@email.com.
+Regarding your request: I'm customer 5 and need help upgrading my account
+- If anything looks off, reply here and I'll take action right away.
+I'll stay on this until you're satisfied. Reply with any details you'd like me to handle now.
+
+A2A log:
+- Router -> Data: context sent
+- Data -> Router: Executed get_customer
+- Router -> Support: context sent
+- Support -> Router: response captured
+
+=== Prompt: Show me all active customers who have open tickets ===
+Hi there, thanks for reaching out.
+Latest open ticket #1: Cannot login to account (status open).
+Regarding your request: Show me all active customers who have open tickets
+- I can follow up on any of the open tickets listed above.
+- If anything looks off, reply here and I'll take action right away.
+I'll stay on this until you're satisfied. Reply with any details you'd like me to handle now.
+
+A2A log:
+- Router -> Data: context sent
+- Data -> Router: Executed list_customers; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Compiled report for 12 active customers with open tickets
+- Router -> Support: context sent
+- Support -> Router: response captured
+
+=== Prompt: I've been charged twice, please refund immediately! I'm customer 1 ===
+Billing support on it. Account 1 (new@email.com) noted. Issue details: I've been charged twice, please refund immediately! I'm customer 1 Request: I've been charged twice, please refund immediately! I'm customer 1 Next steps: we'll verify the transactions, apply necessary refunds, and confirm once resolved.
+
+A2A log:
+- Router -> Data: context sent
+- Data -> Router: Executed get_customer
+- Router -> Support: context sent
+- Support -> Router: response captured
+- Router -> Billing: context sent
+- Billing -> Router: response captured
+
+=== Prompt: Update my email to new@email.com and show my ticket history for customer 1 ===
+Hi there, thanks for reaching out.
+Latest open ticket #1: Cannot login to account (status open).
+Regarding your request: Update my email to new@email.com and show my ticket history for customer 1
+- I can follow up on any of the open tickets listed above.
+- If anything looks off, reply here and I'll take action right away.
+I'll stay on this until you're satisfied. Reply with any details you'd like me to handle now.
+
+A2A log:
+- Router -> Data: context sent
+- Data -> Router: Executed update_customer; Executed get_customer_history
+- Router -> Support: context sent
+- Support -> Router: response captured

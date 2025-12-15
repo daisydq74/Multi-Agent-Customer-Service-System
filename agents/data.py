@@ -1,7 +1,6 @@
 import json
 import os
-import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List
 
 import httpx
 from fastapi import FastAPI
@@ -20,96 +19,75 @@ async def call_mcp(tool: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         return response.json()["result"]
 
 
-def parse_customer_id(text: str) -> Optional[int]:
-    match = re.search(r"(?:customer\\s*id|id)\s*[:#]?\s*(\\d+)", text, re.IGNORECASE)
-    return int(match.group(1)) if match else None
-
-
-def parse_email(text: str) -> Optional[str]:
-    match = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)
-    return match.group(0) if match else None
-
-
-def parse_status(text: str) -> Optional[str]:
-    lower = text.lower()
-    if "disabled" in lower or "inactive" in lower:
-        return "disabled"
-    if "active" in lower:
-        return "active"
-    return None
-
-
-def parse_limit(text: str) -> int:
-    match = re.search(r"limit\s+(\d+)", text, re.IGNORECASE)
-    return int(match.group(1)) if match else 50
-
-
-def parse_priority(text: str) -> str:
-    urgent_markers = ["immediately", "charged twice", "refund", "urgent", "asap"]
-    lower = text.lower()
-    return "high" if any(marker in lower for marker in urgent_markers) else "medium"
-
-
 async def data_skill(message: Message) -> Message:
     prompt = message.parts[0].text if message.parts else ""
-    lower_prompt = prompt.lower()
+    try:
+        payload = json.loads(prompt)
+    except json.JSONDecodeError:
+        error_payload = {
+            "handled": False,
+            "reason": "Invalid structured request: expected JSON with request, customer_id, and email.",
+        }
+        return build_text_message(json.dumps(error_payload))
 
-    customer_id = parse_customer_id(prompt)
-    status = parse_status(prompt)
-    limit = parse_limit(prompt)
-    email = parse_email(prompt)
-    priority = parse_priority(prompt)
+    request_text: str = payload.get("request", "")
+    customer_id = payload.get("customer_id")
+    email = payload.get("email")
 
-    tool = ""
-    args: Dict[str, Any] = {}
-    summary = ""
-    result: Dict[str, Any] | Any = {}
+    tool_calls: List[Dict[str, Any]] = []
+    summaries: List[str] = []
+    data_context: Dict[str, Any] = {}
 
-    if "history" in lower_prompt:
-        if customer_id is None:
-            summary = "No customer id provided for history lookup."
-        else:
-            tool = "get_customer_history"
-            args = {"customer_id": customer_id}
-            result = await call_mcp(tool, args)
-            summary = f"History fetched for customer {customer_id}"
-    elif "list" in lower_prompt:
-        tool = "list_customers"
-        args = {"status": status, "limit": limit}
-        result = await call_mcp(tool, args)
-        summary = f"Listed {len(result)} customers"
-    elif "update" in lower_prompt or "change" in lower_prompt:
-        if customer_id is None:
-            summary = "No customer id provided for update."
-        else:
-            update_fields = {k: v for k, v in {"email": email, "status": status}.items() if v is not None}
-            if "name" in lower_prompt:
-                update_fields["name"] = prompt
-            if not update_fields:
-                summary = "No valid fields provided for update."
-            else:
-                tool = "update_customer"
-                args = {"customer_id": customer_id, "data": update_fields}
-                result = await call_mcp(tool, args)
-                summary = f"Updated customer {customer_id}"
-    elif "ticket" in lower_prompt or "issue" in lower_prompt:
-        if customer_id is None:
-            summary = "No customer id provided for ticket creation."
-        else:
-            tool = "create_ticket"
-            args = {"customer_id": customer_id, "issue": prompt, "priority": priority}
-            result = await call_mcp(tool, args)
-            summary = f"Created ticket for customer {customer_id}"
+    async def run_tool(name: str, arguments: Dict[str, Any]) -> Any:
+        try:
+            result = await call_mcp(name, arguments)
+            summaries.append(f"Executed {name}")
+            tool_calls.append({"tool": name, "args": arguments, "result": result})
+            return result
+        except Exception as exc:  # noqa: BLE001
+            summaries.append(f"Failed {name}: {exc}")
+            tool_calls.append({"tool": name, "args": arguments, "result": {"error": str(exc)}})
+            return {}
+
+    if customer_id and email:
+        update_result = await run_tool("update_customer", {"customer_id": customer_id, "data": {"email": email}})
+        history_result = await run_tool("get_customer_history", {"customer_id": customer_id})
+        data_context = {
+            "customer_id": customer_id,
+            "email": email,
+            "updated": update_result,
+            "history": history_result,
+        }
+    elif customer_id:
+        customer_result = await run_tool("get_customer", {"customer_id": customer_id})
+        data_context = {"customer": customer_result}
     else:
-        if customer_id is None:
-            summary = "No customer id provided for lookup."
-        else:
-            tool = "get_customer"
-            args = {"customer_id": customer_id}
-            result = await call_mcp(tool, args)
-            summary = f"Fetched customer {customer_id}"
+        customers_result = await run_tool("list_customers", {"status": "active", "limit": 50})
+        customers = customers_result.get("result", []) if isinstance(customers_result, dict) else customers_result
+        customers = customers if isinstance(customers, list) else []
+        open_ticket_context: List[Dict[str, Any]] = []
+        for customer in customers:
+            cid = customer.get("id") if isinstance(customer, dict) else None
+            if cid is None:
+                continue
+            history_result = await run_tool("get_customer_history", {"customer_id": cid})
+            records = history_result.get("result", []) if isinstance(history_result, dict) else history_result
+            records = records if isinstance(records, list) else []
+            open_items = [r for r in records if isinstance(r, dict) and r.get("status") in {"open", "in_progress"}]
+            if open_items:
+                open_ticket_context.append({"customer": customer, "open_tickets": open_items})
+        data_context = {"active_customers_with_open_tickets": open_ticket_context}
+        summaries.append(f"Compiled report for {len(open_ticket_context)} active customers with open tickets")
 
-    response_payload = {"tool": tool or "none", "args": args, "result": result, "summary": summary}
+    response_payload = {
+        "handled": True,
+        "tool_calls": tool_calls,
+        "summary": "; ".join(summaries) if summaries else "No tools executed",
+        "customer_id": customer_id,
+        "email": email,
+        "request": request_text,
+        "data_context": data_context,
+    }
     return build_text_message(json.dumps(response_payload))
 
 

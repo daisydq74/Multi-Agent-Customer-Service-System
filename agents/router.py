@@ -1,24 +1,29 @@
+import asyncio
+import json
 import os
-from typing import List, TypedDict
+import re
+from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import FastAPI
-from langgraph.graph import StateGraph, END
 
 from langgraph_sdk.types import AgentCard, AgentCapabilities, AgentProvider, AgentSkill, Message, MessageSendParams, Role, Task
 from shared.a2a_handler import SimpleAgentRequestHandler, register_agent_routes
 from shared.message_utils import build_text_message
 
-DATA_AGENT_RPC = os.getenv("DATA_AGENT_RPC", "http://localhost:8011/rpc")
-SUPPORT_AGENT_RPC = os.getenv("SUPPORT_AGENT_RPC", "http://localhost:8012/rpc")
-BILLING_AGENT_RPC = os.getenv("BILLING_AGENT_RPC", "http://localhost:8013/rpc")
+DATA_AGENT_RPC = os.getenv("DATA_AGENT_RPC", "http://127.0.0.1:8011/rpc")
+SUPPORT_AGENT_RPC = os.getenv("SUPPORT_AGENT_RPC", "http://127.0.0.1:8012/rpc")
+BILLING_AGENT_RPC = os.getenv("BILLING_AGENT_RPC", "http://127.0.0.1:8013/rpc")
 
 
-class RouterState(TypedDict):
-    messages: List[str]
-    plan: List[str]
-    specialist_responses: List[str]
-    data_context: str
+def parse_request(text: str) -> Dict[str, Any]:
+    customer_match = re.search(r"(?:customer\s*id|customer|id)\s*[:#]?\s*(\d+)", text, re.IGNORECASE)
+    email_match = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)
+
+    return {
+        "customer_id": int(customer_match.group(1)) if customer_match else None,
+        "email": email_match.group(0) if email_match else None,
+    }
 
 
 async def send_agent_message(agent_rpc_url: str, text: str) -> str:
@@ -43,97 +48,97 @@ async def send_agent_message(agent_rpc_url: str, text: str) -> str:
     return ""
 
 
-def build_graph():
-    graph = StateGraph(RouterState)
-
-    def classify(state: RouterState) -> RouterState:
-        user_input = state["messages"][-1].lower()
-        plan: List[str] = []
-
-        needs_data = any(keyword in user_input for keyword in ["history", "customer", "account", "id", "ticket"])
-        billing_intent = any(keyword in user_input for keyword in ["billing", "refund", "payment", "invoice"])
-
-        if needs_data:
-            plan.append("data")
-        if billing_intent:
-            plan.append("billing")
-        else:
-            plan.append("support")
-
-        state["plan"] = plan
-        return state
-
-    async def call_specialist(state: RouterState) -> RouterState:
-        text = state["messages"][-1]
-        responses: List[str] = []
-        data_context = state.get("data_context", "")
-
-        for step in state.get("plan", []):
-            if step == "data":
-                data_reply = await send_agent_message(DATA_AGENT_RPC, text)
-                data_context = data_reply
-                responses.append(data_reply)
-                state["data_context"] = data_context
-            elif step == "billing":
-                billing_prompt = text
-                if data_context:
-                    billing_prompt = f"{text}\n\nData context: {data_context}"
-                billing_reply = await send_agent_message(BILLING_AGENT_RPC, billing_prompt)
-                responses.append(billing_reply)
-            else:
-                support_prompt = text
-                if data_context:
-                    support_prompt = f"Data context: {data_context}\n\n{text}"
-                support_reply = await send_agent_message(SUPPORT_AGENT_RPC, support_prompt)
-                responses.append(support_reply)
-        state["specialist_responses"] = responses
-        return state
-
-    def summarize(state: RouterState) -> RouterState:
-        combined = " \n".join(state.get("specialist_responses", []))
-        plan_display = " -> ".join(state.get("plan", [])) or "support"
-        state["messages"].append(f"Router summary ({plan_display}): {combined}")
-        return state
-
-    graph.add_node("classify", classify)
-    graph.add_node("call_specialist", call_specialist)
-    graph.add_node("summarize", summarize)
-
-    graph.set_entry_point("classify")
-    graph.add_edge("classify", "call_specialist")
-    graph.add_edge("call_specialist", "summarize")
-    graph.add_edge("summarize", END)
-
-    return graph.compile()
+def _parse_json_payload(text: str) -> Dict[str, Any]:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {}
 
 
-workflow = build_graph()
+def _summarize_result(result: Dict[str, Any]) -> str:
+    if not isinstance(result, dict):
+        return ""
+    if result.get("summary"):
+        return str(result.get("summary"))
+    return str({k: v for k, v in result.items() if k != "tool_calls"})
+
+
+async def call_data_agent(payload: Dict[str, Any], logs: List[str]) -> Dict[str, Any]:
+    logs.append("Router -> Data: context sent")
+    reply = await send_agent_message(DATA_AGENT_RPC, json.dumps(payload))
+    parsed = _parse_json_payload(reply)
+    logs.append(f"Data -> Router: {_summarize_result(parsed)}")
+    return parsed
+
+
+async def call_support(context: Dict[str, Any], logs: List[str]) -> str:
+    payload = json.dumps(context)
+    logs.append("Router -> Support: context sent")
+    reply = await send_agent_message(SUPPORT_AGENT_RPC, payload)
+    logs.append("Support -> Router: response captured")
+    return reply
+
+
+async def call_billing(context: Dict[str, Any], logs: List[str]) -> str:
+    payload = json.dumps(context)
+    logs.append("Router -> Billing: context sent")
+    reply = await send_agent_message(BILLING_AGENT_RPC, payload)
+    logs.append("Billing -> Router: response captured")
+    return reply
 
 
 async def router_skill(message: Message) -> Message:
-    initial_state: RouterState = {
-        "messages": [message.parts[0].text if message.parts else ""],
-        "plan": ["support"],
-        "specialist_responses": [],
-        "data_context": "",
+    user_text = message.parts[0].text if message.parts else ""
+    parsed = parse_request(user_text)
+    logs: List[str] = []
+    customer_id: Optional[int] = parsed.get("customer_id")
+
+    data_payload = {
+        "request": user_text,
+        "customer_id": customer_id,
+        "email": parsed.get("email"),
     }
-    final_state = await workflow.ainvoke(initial_state)
-    summary_text = final_state["messages"][-1]
-    return build_text_message(summary_text)
+    data_context = await call_data_agent(data_payload, logs)
+    data_handled = isinstance(data_context, dict) and data_context.get("handled")
+
+    support_context = {
+        "request": user_text,
+        "customer_id": customer_id,
+        "email": parsed.get("email"),
+        "data_context": data_context if data_handled else {},
+    }
+    support_reply = await call_support(support_context, logs)
+    support_payload = _parse_json_payload(support_reply) or {"reply": support_reply}
+
+    if support_payload.get("escalate_to_billing"):
+        billing_context = {
+            "request": user_text,
+            "customer_id": customer_id,
+            "email": parsed.get("email"),
+            "data_context": data_context,
+            "billing_issue": support_payload.get("billing_issue", ""),
+        }
+        billing_reply = await call_billing(billing_context, logs)
+        answer = billing_reply
+    else:
+        answer = support_payload.get("reply") or support_reply
+
+    final_text = f"{answer}\n\nA2A log:\n- " + "\n- ".join(logs)
+    return build_text_message(final_text)
 
 
 def build_agent_card() -> AgentCard:
     return AgentCard(
         name="Router Agent",
-        description="Orchestrates task routing across specialist A2A agents using LangGraph.",
+        description="Orchestrates task routing across specialist A2A agents using deterministic planning.",
         url="http://localhost:8010",
-        version="1.0.0",
+        version="1.1.0",
         skills=[
             AgentSkill(
                 id="router",
                 name="Router",
-                description="Routes user intents to specialist agents and aggregates responses",
-                tags=["router", "langgraph"],
+                description="Parses user intents, builds plans, and calls specialist agents",
+                tags=["router", "planning"],
                 inputModes=["text"],
                 outputModes=["text"],
                 examples=["Handle a billing question", "Get customer history then respond"],

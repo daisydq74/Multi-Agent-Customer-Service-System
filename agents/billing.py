@@ -1,4 +1,5 @@
 import json
+from typing import Any, Dict
 
 from fastapi import FastAPI
 
@@ -7,50 +8,53 @@ from shared.a2a_handler import SimpleAgentRequestHandler, register_agent_routes
 from shared.message_utils import build_text_message
 
 
-def _split_context(prompt: str) -> tuple[str, str]:
-    if "Data context:" in prompt:
-        lead, data = prompt.split("Data context:", 1)
-        return lead.strip() or "Billing question", data.strip()
-    return prompt, ""
-
-
-def _context_summary(raw: str) -> str:
-    if not raw:
-        return ""
+def _parse_payload(prompt: str) -> tuple[str, Dict[str, Any], str]:
     try:
-        payload = json.loads(raw)
-        if isinstance(payload, dict):
-            result = payload.get("result")
-            if isinstance(result, dict):
-                status = result.get("status")
-                email = result.get("email")
-                return f"Account status {status or 'unknown'}; email on file {email or 'unspecified'}."
-            if isinstance(result, list) and result:
-                latest = result[0]
-                if isinstance(latest, dict):
-                    return (
-                        f"Recent ticket #{latest.get('id')} ({latest.get('status')}): {latest.get('issue')}."
-                    )
-    except Exception:
-        return raw[:200]
-    return raw[:200]
+        payload = json.loads(prompt)
+        request = payload.get("request", "Billing question")
+        data_context = payload.get("data_context", {}) if isinstance(payload, dict) else {}
+        billing_issue = payload.get("billing_issue", "") if isinstance(payload, dict) else ""
+        return str(request), data_context if isinstance(data_context, dict) else {}, billing_issue
+    except json.JSONDecodeError:
+        return prompt or "Billing question", {}, ""
+
+
+def _extract_customer_info(data_context: Dict[str, Any]) -> Dict[str, Any]:
+    for item in data_context.get("tool_calls", []):
+        if item.get("tool") == "get_customer":
+            result = item.get("result", {})
+            return result.get("result", result) if isinstance(result, dict) else result
+    return {}
+
+
+def _strip_instruction_preamble(text: str) -> str:
+    markers = [
+        "Billing Agent:",
+        "Do not mention internal routing",
+    ]
+    header, sep, rest = text.partition("\n\n")
+    if sep and any(marker in header for marker in markers):
+        return rest or header
+    return text
 
 
 async def billing_skill(message: Message) -> Message:
     prompt = message.parts[0].text if message.parts else ""
-    user_request, data_context = _split_context(prompt)
-    context_line = _context_summary(data_context)
+    request, data_context, billing_issue = _parse_payload(prompt)
+    customer = _extract_customer_info(data_context)
 
-    lines = [
-        "Billing Agent: I can help with invoices, refunds, and payment issues.",
-        f"Request: {user_request}",
-    ]
-    if context_line:
-        lines.append(f"Account details: {context_line}")
-    lines.append(
-        "Next steps: I'll review the account, verify recent charges, and process any needed adjustments or refunds."
-    )
-    return build_text_message(" ".join(lines))
+    lines = ["Billing support on it."]
+    if customer:
+        lines.append(
+            f"Account {customer.get('id')} ({customer.get('email', 'no email on file')}) noted."
+        )
+    if billing_issue:
+        lines.append(f"Issue details: {billing_issue}")
+    lines.append(f"Request: {request}")
+    lines.append("Next steps: we'll verify the transactions, apply necessary refunds, and confirm once resolved.")
+
+    reply_text = " ".join(lines)
+    return build_text_message(_strip_instruction_preamble(reply_text))
 
 
 def build_agent_card() -> AgentCard:
