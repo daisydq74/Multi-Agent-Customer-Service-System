@@ -1,0 +1,115 @@
+Connected to database: support.db
+Tables created successfully!
+Triggers created successfully!
+Database connection closed.
+MCP Server healthy at http://localhost:8000/health
+Data Agent healthy at http://localhost:8011/health
+Support Agent healthy at http://localhost:8012/health
+Billing Agent healthy at http://localhost:8013/health
+Router Agent healthy at http://localhost:8010/health
+
+=== Prompt: Get customer information for ID 5 ===
+Customer data: {'id': 5, 'name': 'Charlie Brown', 'email': 'charlie.brown@email.com', 'status': 'active', 'created_at': '2025-12-15 02:55:17'}
+
+A2A log:
+- Router -> Data: tool=get_customer args={'customer_id': 5}
+- Data -> Router: tool=get_customer args={'customer_id': 5} summary=Executed get_customer
+
+=== Prompt: I'm customer 12345 and need help upgrading my account ===
+Hi Demo VIP, I pulled up your account details.
+Account status: active. Email on file: new@email.com.
+Regarding your request: I'm customer 12345 and need help upgrading my account
+- We can enable the upgraded plan on your account and confirm pricing before applying it.
+- If you have preferences (billing cycle, feature set), share them and I'll tailor the upgrade.
+- If anything looks off, reply here and I'll take action right away.
+I'll stay on this until you're satisfied. Reply with any details you'd like me to handle now.
+
+A2A log:
+- Router -> Data: tool=get_customer args={'customer_id': 12345}
+- Data -> Router: tool=get_customer args={'customer_id': 12345} summary=Executed get_customer
+- Router -> Support: context sent
+- Support -> Router: response captured
+
+=== Prompt: Show me all active customers who have open tickets ===
+Active customers with open tickets:
+- Customer 1 (John Doe):
+  • Ticket #1 - Cannot login to account (status: open)
+- Customer 2 (Jane Smith):
+  • Ticket #15 - Feature request: dark mode (status: open)
+- Customer 4 (Alice Williams):
+  • Ticket #24 - Feature request: integration with Slack (status: open)
+- Customer 5 (Charlie Brown):
+  • Ticket #8 - Email notifications not being received (status: open)
+- Customer 6 (Diana Prince):
+  • Ticket #18 - Request for additional language support (status: open)
+- Customer 7 (Edward Norton):
+  • Ticket #3 - Payment processing failing for all transactions (status: open)
+- Customer 9 (George Miller):
+  • Ticket #10 - Export to CSV feature broken (status: open)
+- Customer 10 (Hannah Lee):
+  • Ticket #25 - Suggestion: add keyboard shortcuts (status: open)
+- Customer 11 (Isaac Newton):
+  • Ticket #20 - Feature request: export to PDF (status: open)
+- Customer 12 (Julia Roberts):
+  • Ticket #21 - Color scheme suggestion for better contrast (status: open)
+- Customer 15 (Michael Scott):
+  • Ticket #13 - API rate limiting too restrictive (status: open)
+- Customer 12345 (Demo VIP):
+  • Ticket #26 - Requested upgrade review (status: open)
+  • Ticket #27 - I've been charged twice, please refund immediately! I'm customer 12345 (status: open)
+
+A2A log:
+- Router -> Data: tool=list_customers args={'status': 'active'}
+- Data -> Router: tool=list_customers args={'status': 'active'} summary=Executed list_customers
+- Router -> Data: tool=get_customer_history args={'customer_id': 1}
+- Data -> Router: tool=get_customer_history args={'customer_id': 1} summary=Executed get_customer_history
+- Router -> Data: tool=get_customer_history args={'customer_id': 2}
+- Data -> Router: tool=get_customer_history args={'customer_id': 2} summary=Executed get_customer_history
+- Router -> Data: tool=get_customer_history args={'customer_id': 4}
+- Data -> Router: tool=get_customer_history args={'customer_id': 4} summary=Executed get_customer_history
+- Router -> Data: tool=get_customer_history args={'customer_id': 5}
+- Data -> Router: tool=get_customer_history args={'customer_id': 5} summary=Executed get_customer_history
+- Router -> Data: tool=get_customer_history args={'customer_id': 6}
+- Data -> Router: tool=get_customer_history args={'customer_id': 6} summary=Executed get_customer_history
+- Router -> Data: tool=get_customer_history args={'customer_id': 7}
+- Data -> Router: tool=get_customer_history args={'customer_id': 7} summary=Executed get_customer_history
+- Router -> Data: tool=get_customer_history args={'customer_id': 9}
+- Data -> Router: tool=get_customer_history args={'customer_id': 9} summary=Executed get_customer_history
+- Router -> Data: tool=get_customer_history args={'customer_id': 10}
+- Data -> Router: tool=get_customer_history args={'customer_id': 10} summary=Executed get_customer_history
+- Router -> Data: tool=get_customer_history args={'customer_id': 11}
+- Data -> Router: tool=get_customer_history args={'customer_id': 11} summary=Executed get_customer_history
+- Router -> Data: tool=get_customer_history args={'customer_id': 12}
+- Data -> Router: tool=get_customer_history args={'customer_id': 12} summary=Executed get_customer_history
+- Router -> Data: tool=get_customer_history args={'customer_id': 14}
+- Data -> Router: tool=get_customer_history args={'customer_id': 14} summary=Executed get_customer_history
+- Router -> Data: tool=get_customer_history args={'customer_id': 15}
+- Data -> Router: tool=get_customer_history args={'customer_id': 15} summary=Executed get_customer_history
+- Router -> Data: tool=get_customer_history args={'customer_id': 12345}
+- Data -> Router: tool=get_customer_history args={'customer_id': 12345} summary=Executed get_customer_history
+
+=== Prompt: I've been charged twice, please refund immediately! I'm customer 12345 ===
+Billing support on it. Account 12345 (new@email.com) noted. Created a high-priority ticket so our team can process this immediately. We've marked this as urgent and will review recent charges for duplicates. Request: I've been charged twice, please refund immediately! I'm customer 12345 Next steps: we'll verify the transactions, apply necessary refunds, and confirm once resolved.
+
+A2A log:
+- Router -> Data: tool=get_customer args={'customer_id': 12345}
+- Data -> Router: tool=get_customer args={'customer_id': 12345} summary=Executed get_customer
+- Router -> Data: tool=create_ticket args={'customer_id': 12345, 'issue': "I've been charged twice, please refund immediately! I'm customer 12345", 'priority': 'high'}
+- Data -> Router: tool=create_ticket args={'customer_id': 12345, 'issue': "I've been charged twice, please refund immediately! I'm customer 12345", 'priority': 'high'} summary=Executed create_ticket
+- Router -> Billing: context sent
+- Billing -> Router: response captured
+
+=== Prompt: Update my email to new@email.com and show my ticket history for customer 12345 ===
+Updated customer record: {'id': 12345, 'name': 'Demo VIP', 'email': 'new@email.com', 'status': 'active', 'created_at': '2025-12-15 02:55:17'}
+Ticket history:
+- Ticket #28 (open): I've been charged twice, please refund immediately! I'm customer 12345 [priority high]
+- Ticket #26 (open): Requested upgrade review [priority medium]
+- Ticket #27 (open): I've been charged twice, please refund immediately! I'm customer 12345 [priority high]
+
+A2A log:
+- Router -> Data: tool=get_customer args={'customer_id': 12345}
+- Data -> Router: tool=get_customer args={'customer_id': 12345} summary=Executed get_customer
+- Router -> Data: tool=update_customer args={'customer_id': 12345, 'data': {'email': 'new@email.com'}}
+- Router -> Data: tool=get_customer_history args={'customer_id': 12345}
+- Data -> Router: tool=update_customer args={'customer_id': 12345, 'data': {'email': 'new@email.com'}} summary=Executed update_customer
+- Data -> Router: tool=get_customer_history args={'customer_id': 12345} summary=Executed get_customer_history
