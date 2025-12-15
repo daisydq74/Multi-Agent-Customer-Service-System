@@ -93,20 +93,19 @@ async def router_skill(message: Message) -> Message:
     logs: List[str] = []
     customer_id: Optional[int] = parsed.get("customer_id")
 
-    data_context: Dict[str, Any] = {}
-    if customer_id or parsed.get("email"):
-        data_payload = {
-            "request": user_text,
-            "customer_id": customer_id,
-            "email": parsed.get("email"),
-        }
-        data_context = await call_data_agent(data_payload, logs)
+    data_payload = {
+        "request": user_text,
+        "customer_id": customer_id,
+        "email": parsed.get("email"),
+    }
+    data_context = await call_data_agent(data_payload, logs)
+    data_handled = isinstance(data_context, dict) and data_context.get("handled")
 
     support_context = {
         "request": user_text,
         "customer_id": customer_id,
         "email": parsed.get("email"),
-        "data_context": data_context,
+        "data_context": data_context if data_handled else {},
     }
     support_reply = await call_support(support_context, logs)
     support_payload = _parse_json_payload(support_reply) or {"reply": support_reply}
