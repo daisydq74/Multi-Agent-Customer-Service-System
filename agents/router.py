@@ -141,10 +141,15 @@ async def _plan_with_llm(user_text: str, parsed: Dict[str, Any]) -> Optional[Pla
         "Return ONLY strict JSON following this schema:\n"
         "{\"steps\":[{\"agent\":\"data|support|billing\",\"payload\":{...}} or {\"parallel\":[...]}],"
         "\"final_answer_strategy\":\"last_step_text|compose\"}. "
-        "Steps may be in any order; omit agents that aren't needed. Avoid markdown."
-        "Use parallel when multiple similar fetches are needed. For account-specific requests, prefer data then support."
-        "Honor a maximum of 12 customers and 5 total steps. Never rewrite the request text; use it verbatim in payload.request."
-        "If the user asks for multiple actions, create multiple steps so each action is executed."
+        "The plan must end with a user-facing step: default to support unless the request is billing-only, in which case end with billing."
+        " Do not end with data unless the user explicitly wants raw tool output."
+        " Steps may be in any order; omit agents that aren't needed. Avoid markdown."
+        " Use parallel when multiple similar fetches are needed. For account-specific requests, prefer data then support."
+        " Honor a maximum of 12 customers and 5 total steps. Never rewrite the request text; use it verbatim in payload.request."
+        " If the user asks for multiple actions, create multiple steps so each action is executed."
+        " Examples (strict JSON):"
+        " {\"steps\":[{\"agent\":\"data\",\"payload\":{\"request\":\"Get customer information for ID 5\",\"customer_id\":5}},{\"agent\":\"support\",\"payload\":{\"request\":\"Get customer information for ID 5\",\"customer_id\":5,\"data_context\":{}}}],\"final_answer_strategy\":\"last_step_text\"}"
+        " {\"steps\":[{\"agent\":\"data\",\"payload\":{\"request\":\"Issue a refund for order 123 for customer 5\",\"customer_id\":5}},{\"agent\":\"billing\",\"payload\":{\"request\":\"Issue a refund for order 123 for customer 5\",\"data_context\":{},\"billing_issue\":\"refund request\"}}],\"final_answer_strategy\":\"last_step_text\"}"
     )
     messages = [
         {
@@ -261,7 +266,7 @@ async def _plan_node(state: RouterState) -> RouterState:
     validated = _validate_plan(llm_plan)
     if not validated:
         validated = _fallback_plan(user_text, parsed)
-    logs = state.get("logs", [])
+    logs = list(state.get("logs", []))
     logs.append(f"Planner -> Router: {json.dumps(validated)}")
     return {"plan": validated, "step_index": 0, "logs": logs}
 
@@ -274,11 +279,18 @@ def _with_request(payload: Dict[str, Any], user_text: str) -> Dict[str, Any]:
 
 
 async def _execute_step(step: PlanStep, state: RouterState, logs: List[str]) -> RouterState:
+    logs = list(logs)
     if "parallel" in step and isinstance(step.get("parallel"), list):
+        logs.append("Router: parallel step started")
         child_results = await asyncio.gather(*[_execute_step(child, state, logs) for child in step["parallel"]])
         merged: RouterState = {}
         data_batches: List[Any] = []
+        merged_logs = list(logs)
         for res in child_results:
+            child_logs = res.get("logs", [])
+            for line in child_logs:
+                if line not in merged_logs:
+                    merged_logs.append(line)
             if "data_context" in res:
                 data_batches.append(res["data_context"])
             for key in ["support_payload", "billing_reply"]:
@@ -286,12 +298,14 @@ async def _execute_step(step: PlanStep, state: RouterState, logs: List[str]) -> 
                     merged[key] = res[key]
         if data_batches:
             merged["data_context"] = {"batch_results": data_batches} if len(data_batches) > 1 else data_batches[0]
+        merged_logs.append("Router: parallel step finished")
+        merged["logs"] = merged_logs
         return merged
     agent = step["agent"]
     payload = _with_request(step.get("payload", {}), state.get("user_text", ""))
     if agent == "data":
         data_context = await call_data_agent(payload, logs)
-        return {"data_context": data_context}
+        return {"data_context": data_context, "logs": logs}
     if agent == "support":
         payload = {**payload}
         latest_context = state.get("data_context")
@@ -301,7 +315,7 @@ async def _execute_step(step: PlanStep, state: RouterState, logs: List[str]) -> 
             payload["data_context"] = {}
         support_reply = await call_support(payload, logs)
         parsed_reply = _parse_json_payload(support_reply) or {"reply": support_reply}
-        return {"support_payload": parsed_reply}
+        return {"support_payload": parsed_reply, "logs": logs}
     if agent == "billing":
         billing_payload = {**payload}
         latest_context = state.get("data_context")
@@ -310,22 +324,25 @@ async def _execute_step(step: PlanStep, state: RouterState, logs: List[str]) -> 
         elif "data_context" not in billing_payload:
             billing_payload["data_context"] = {}
         billing_reply = await call_billing(billing_payload, logs)
-        return {"billing_reply": billing_reply}
-    return {}
+        return {"billing_reply": billing_reply, "logs": logs}
+    return {"logs": logs}
 
 
 async def _run_step_node(state: RouterState) -> RouterState:
     plan = state["plan"]
     idx = state.get("step_index", 0)
-    logs = state.get("logs", [])
+    logs = list(state.get("logs", []))
     if idx >= len(plan["steps"]):
-        return {}
+        return {"logs": logs}
     step = plan["steps"][idx]
+    logs.append(f"Router: executing step {idx + 1} -> {step.get('agent', 'unknown')}")
     return await _execute_step(step, state, logs)
 
 
 async def _advance_node(state: RouterState) -> RouterState:
-    return {"step_index": state.get("step_index", 0) + 1}
+    logs = list(state.get("logs", []))
+    logs.append("Router: advancing to next step")
+    return {"step_index": state.get("step_index", 0) + 1, "logs": logs}
 
 
 def _should_continue(state: RouterState) -> str:
@@ -385,6 +402,7 @@ async def _compose_with_llm(state: RouterState) -> Optional[str]:
 
 
 async def _finalize_node(state: RouterState) -> RouterState:
+    logs = list(state.get("logs", []))
     plan = state.get("plan") or _fallback_plan(state.get("user_text", ""), state.get("parsed", {}))
     strategy = plan.get("final_answer_strategy", "last_step_text")
     last_agent = plan.get("steps", [{}])[-1].get("agent") if plan.get("steps") else None
@@ -400,7 +418,8 @@ async def _finalize_node(state: RouterState) -> RouterState:
         final_answer = await _compose_with_llm(state)
     if not final_answer:
         final_answer = await _compose_fallback(state)
-    return {"final_answer": final_answer}
+    logs.append("Router: finalized response")
+    return {"final_answer": final_answer, "logs": logs}
 
 
 router_graph = StateGraph(RouterState)
@@ -430,7 +449,8 @@ async def router_skill(message: Message) -> Message:
     final_state = await compiled_router_graph.ainvoke(initial_state)
     answer = final_state.get("final_answer", "")
     if os.getenv("DEBUG_A2A_LOGS") == "1":
-        answer = f"{answer}\n\nA2A log:\n- " + "\n- ".join(logs)
+        final_logs = final_state.get("logs", logs)
+        answer = f"{answer}\n\nA2A log:\n- " + "\n- ".join(final_logs)
     return build_text_message(answer)
 
 
