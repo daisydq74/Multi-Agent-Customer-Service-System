@@ -89,7 +89,12 @@ def create_ticket_record(customer_id: int, issue: str, priority: str) -> Dict[st
 def fetch_history(customer_id: int) -> List[Dict[str, Any]]:
     with _get_connection() as conn:
         cursor = conn.execute(
-            "SELECT id, channel, notes, created_at FROM interactions WHERE customer_id = ? ORDER BY created_at DESC",
+            """
+            SELECT id, customer_id, issue, status, priority, created_at
+            FROM tickets
+            WHERE customer_id = ?
+            ORDER BY created_at DESC
+            """,
             (customer_id,),
         )
         rows: Iterable[sqlite3.Row] = cursor.fetchall()
