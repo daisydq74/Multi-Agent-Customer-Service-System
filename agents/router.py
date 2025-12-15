@@ -54,7 +54,7 @@ class RouterState(TypedDict, total=False):
     step_index: int
     data_context: Dict[str, Any]
     support_payload: Dict[str, Any]
-    billing_reply: Optional[str]
+    billing_reply: Optional[Any]
     final_answer: Optional[str]
 
 
@@ -265,6 +265,77 @@ def _validate_plan(plan: Optional[Plan]) -> Optional[Plan]:
     return {"steps": cleaned_steps, "final_answer_strategy": strategy}
 
 
+def _get_last_agent(step: PlanStep) -> Optional[str]:
+    if step.get("agent"):
+        return step["agent"]
+    if isinstance(step.get("parallel"), list):
+        for child in reversed(step["parallel"]):
+            agent = _get_last_agent(child)
+            if agent:
+                return agent
+    return None
+
+
+def _has_billing_step(steps: List[PlanStep]) -> bool:
+    for step in steps:
+        if step.get("agent") == "billing":
+            return True
+        if isinstance(step.get("parallel"), list) and _has_billing_step(step["parallel"]):
+            return True
+    return False
+
+
+def _append_final_user_step(
+    plan: Plan, user_text: str, parsed: Dict[str, Any]
+) -> Plan:
+    steps = list(plan.get("steps", []))
+    if not steps:
+        return plan
+
+    last_agent = _get_last_agent(steps[-1])
+    billing_needed = _has_billing_step(steps)
+
+    def add_support_step():
+        steps.append(
+            {
+                "agent": "support",
+                "payload": {
+                    "request": user_text,
+                    "customer_id": parsed.get("customer_id"),
+                    "email": parsed.get("email"),
+                    "data_context": {},
+                },
+            }
+        )
+
+    def add_billing_step():
+        steps.append(
+            {
+                "agent": "billing",
+                "payload": {
+                    "request": user_text,
+                    "customer_id": parsed.get("customer_id"),
+                    "email": parsed.get("email"),
+                    "data_context": {},
+                },
+            }
+        )
+
+    if last_agent == "data" or last_agent is None:
+        add_billing_step() if billing_needed else add_support_step()
+    elif last_agent == "support":
+        pass
+    elif last_agent == "billing":
+        pass
+    else:
+        add_billing_step() if billing_needed else add_support_step()
+
+    while len(steps) > MAX_PLAN_STEPS and len(steps) > 1:
+        steps.pop(-2)
+
+    return {"steps": steps, "final_answer_strategy": plan.get("final_answer_strategy", "last_step_text")}
+
+
 async def _plan_node(state: RouterState) -> RouterState:
     parsed = state.get("parsed", {})
     user_text = state["user_text"]
@@ -272,6 +343,7 @@ async def _plan_node(state: RouterState) -> RouterState:
     validated = _validate_plan(llm_plan)
     if not validated:
         validated = _fallback_plan(user_text, parsed)
+    validated = _append_final_user_step(validated, user_text, parsed)
     logs = list(state.get("logs", []))
     logs.append(f"Planner -> Router: {json.dumps(validated)}")
     return {"plan": validated, "step_index": 0, "logs": logs}
@@ -279,8 +351,7 @@ async def _plan_node(state: RouterState) -> RouterState:
 
 def _with_request(payload: Dict[str, Any], user_text: str) -> Dict[str, Any]:
     prepared = {**payload}
-    if "request" not in prepared or not isinstance(prepared.get("request"), str) or not prepared.get("request"):
-        prepared["request"] = user_text
+    prepared["request"] = user_text
     return prepared
 
 
@@ -320,8 +391,12 @@ async def _execute_step(step: PlanStep, state: RouterState, logs: List[str]) -> 
         elif "data_context" not in payload:
             payload["data_context"] = {}
         support_reply = await call_support(payload, logs)
-        parsed_reply = _parse_json_payload(support_reply) or {"reply": support_reply}
-        return {"support_payload": parsed_reply, "logs": logs}
+        parsed_reply = _parse_json_payload(support_reply)
+        if parsed_reply and isinstance(parsed_reply, dict) and parsed_reply.get("reply"):
+            normalized_reply = {"reply": parsed_reply.get("reply")}
+        else:
+            normalized_reply = {"reply": support_reply}
+        return {"support_payload": normalized_reply, "logs": logs}
     if agent == "billing":
         billing_payload = {**payload}
         latest_context = state.get("data_context")
@@ -330,7 +405,12 @@ async def _execute_step(step: PlanStep, state: RouterState, logs: List[str]) -> 
         elif "data_context" not in billing_payload:
             billing_payload["data_context"] = {}
         billing_reply = await call_billing(billing_payload, logs)
-        return {"billing_reply": billing_reply, "logs": logs}
+        parsed_billing = _parse_json_payload(billing_reply)
+        if parsed_billing and isinstance(parsed_billing, dict) and parsed_billing.get("reply"):
+            normalized_billing = {"reply": parsed_billing.get("reply"), "handled": parsed_billing.get("handled")}
+        else:
+            normalized_billing = {"reply": billing_reply}
+        return {"billing_reply": normalized_billing, "logs": logs}
     return {"logs": logs}
 
 
@@ -363,7 +443,10 @@ async def _compose_fallback(state: RouterState) -> str:
     if state.get("support_payload") and state["support_payload"].get("reply"):
         return state["support_payload"]["reply"]
     if state.get("billing_reply"):
-        return state["billing_reply"] or ""
+        billing_reply = state["billing_reply"]
+        if isinstance(billing_reply, dict) and billing_reply.get("reply"):
+            return billing_reply.get("reply", "") or ""
+        return str(billing_reply)
     if state.get("data_context"):
         return _summarize_result(state["data_context"])
     return "I'm sorry, I was unable to produce a response."
@@ -380,7 +463,8 @@ async def _compose_with_llm(state: RouterState) -> Optional[str]:
     if state.get("support_payload"):
         summary_bits.append(f"support: {json.dumps(state['support_payload'])}")
     if state.get("billing_reply"):
-        summary_bits.append(f"billing: {state['billing_reply']}")
+        billing_reply = state["billing_reply"]
+        summary_bits.append(f"billing: {_summarize_result(billing_reply) if isinstance(billing_reply, dict) else billing_reply}")
     try:
         response = await client.chat.completions.create(
             model=ROUTER_LLM_MODEL,
@@ -413,13 +497,17 @@ async def _finalize_node(state: RouterState) -> RouterState:
     logs = list(state.get("logs", []))
     plan = state.get("plan") or _fallback_plan(state.get("user_text", ""), state.get("parsed", {}))
     strategy = plan.get("final_answer_strategy", "last_step_text")
-    last_agent = plan.get("steps", [{}])[-1].get("agent") if plan.get("steps") else None
+    last_agent = _get_last_agent(plan.get("steps", [{}])[-1]) if plan.get("steps") else None
     final_answer: Optional[str] = None
     if strategy == "last_step_text":
         if last_agent == "support" and state.get("support_payload"):
             final_answer = state["support_payload"].get("reply")
         elif last_agent == "billing" and state.get("billing_reply") is not None:
-            final_answer = state.get("billing_reply")
+            billing_reply = state.get("billing_reply")
+            if isinstance(billing_reply, dict):
+                final_answer = billing_reply.get("reply")
+            else:
+                final_answer = billing_reply
         elif last_agent == "data" and state.get("data_context"):
             final_answer = _summarize_result(state["data_context"])
     elif strategy == "compose":
