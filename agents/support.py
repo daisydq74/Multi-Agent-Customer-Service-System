@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from typing import Any, Dict, List, Tuple
+
 from fastapi import FastAPI
 
 from langgraph_sdk.types import AgentCard, AgentCapabilities, AgentProvider, AgentSkill, Message
@@ -7,95 +10,83 @@ from shared.a2a_handler import SimpleAgentRequestHandler, register_agent_routes
 from shared.message_utils import build_text_message
 
 SUPPORT_SYSTEM_PROMPT = (
-    "You are a friendly customer support representative. Use any provided account context as background, "
+    "You are a friendly customer support representative. Use the provided account context as background, "
     "but speak directly to the customer in clear, empathetic language. Briefly summarize what you know about "
     "their situation and offer 2–3 practical next steps. Do not mention internal routing, agents, or raw JSON."
 )
 
 
-def _extract_context_and_request(prompt: str) -> tuple[str, str]:
-    """Split incoming text into optional data context and the user's request."""
-
-    if "Data context:" in prompt:
-        lead, data = prompt.split("Data context:", 1)
-        request = lead.strip() if lead.strip() else "your request"
-        return data.strip(), request
-    return "", prompt.strip() or "your request"
-
-
-def _summarize_data_context(data: str) -> str:
-    if not data:
-        return ""
+def _extract_payload(prompt: str) -> Tuple[str, Dict[str, Any], List[Dict[str, Any]]]:
     try:
-        import json
-
-        payload = json.loads(data)
-        result = payload.get("result") if isinstance(payload, dict) else None
-        if isinstance(result, list) and result:
-            latest = result[0]
-            if isinstance(latest, dict):
-                ticket_id = latest.get("id")
-                status = latest.get("status")
-                issue = latest.get("issue") or "recent activity"
-                return f"Latest ticket #{ticket_id} ({status}): {issue}."
-        if isinstance(result, dict):
-            name = result.get("name")
-            status = result.get("status")
-            return f"Account {name or 'record'} is currently {status or 'noted'}."
-    except Exception:
-        return data[:200]
-    return data[:200]
+        payload = json.loads(prompt)
+        request = payload.get("request", "your request")
+        parsed_flags = payload.get("parsed_flags", {})
+        data_results = payload.get("data_results", [])
+        return str(request), parsed_flags if isinstance(parsed_flags, dict) else {}, data_results if isinstance(data_results, list) else []
+    except json.JSONDecodeError:
+        return prompt or "your request", {}, []
 
 
-def _build_suggestions(prompt: str) -> list[str]:
-    lower = prompt.lower()
-    suggestions = []
-    if "login" in lower or "password" in lower:
-        suggestions.append("Try resetting your password and confirm you can sign in from a trusted browser.")
-        suggestions.append("If the issue persists, send us the exact error message so we can investigate quickly.")
-    elif "ticket" in lower or "issue" in lower:
-        suggestions.append("We'll open a support ticket and keep you updated via email.")
-        suggestions.append("Feel free to reply with any screenshots or timestamps to speed things up.")
-    elif "history" in lower or "follow" in lower:
-        suggestions.append("We reviewed your recent activity and will keep monitoring for any new updates.")
-        suggestions.append("If anything changes, let us know and we can adjust the plan together.")
-    else:
-        suggestions.append("Let me know any specifics you want us to double-check.")
-        suggestions.append("We can schedule a quick follow-up if you'd like more help.")
-    suggestions.append("If you need urgent assistance, reply here and we'll prioritize your request.")
-    return suggestions
+def _extract_customer_details(data_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    for item in data_results:
+        if item.get("tool") == "get_customer":
+            result = item.get("result", {})
+            return result.get("result", result) if isinstance(result, dict) else result
+    return {}
+
+
+def _extract_recent_history(data_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    for item in data_results:
+        if item.get("tool") == "get_customer_history":
+            result = item.get("result", {})
+            history = result.get("result", result) if isinstance(result, dict) else result
+            return history if isinstance(history, list) else []
+    return []
+
+
+def _build_suggestions(flags: Dict[str, Any], history: List[Dict[str, Any]]) -> List[str]:
+    suggestions: List[str] = []
+    if flags.get("needs_upgrade_help"):
+        suggestions.append("We can enable the upgraded plan on your account and confirm pricing before applying it.")
+        suggestions.append("If you have preferences (billing cycle, feature set), share them and I'll tailor the upgrade.")
+    if flags.get("wants_ticket_history") and history:
+        suggestions.append("I've reviewed your open items above and can follow up on any unresolved tickets immediately.")
+    suggestions.append("If anything looks off, reply here and I'll take action right away.")
+    return suggestions[:3]
 
 
 async def support_skill(message: Message) -> Message:
     prompt = message.parts[0].text if message.parts else ""
-    data_context, user_request = _extract_context_and_request(prompt)
+    request_text, parsed_flags, data_results = _extract_payload(prompt)
+    customer = _extract_customer_details(data_results)
+    history = _extract_recent_history(data_results)
 
     intro = "Hi there, thanks for reaching out."
-    if data_context:
-        intro = "Hi there, I took a look at the recent notes on your account."
+    if customer:
+        intro = f"Hi {customer.get('name', 'there')}, I pulled up your account details."
 
-    context_line = ""
-    if "login" in prompt.lower():
-        context_line = "It looks like you're having trouble signing in."
-    elif "ticket" in prompt.lower() or "issue" in prompt.lower():
-        context_line = "I see you're dealing with an issue you'd like us to track."
-    elif data_context:
-        context_line = _summarize_data_context(data_context)
+    context_lines: List[str] = []
+    if customer:
+        status = customer.get("status")
+        email = customer.get("email")
+        context_lines.append(f"Account status: {status or 'active'}. Email on file: {email or 'not provided'}.")
+    if history:
+        open_items = [h for h in history if h.get("status") == "open"]
+        if open_items:
+            latest = open_items[0]
+            context_lines.append(f"Latest open ticket #{latest.get('id')}: {latest.get('issue')} (status {latest.get('status')}).")
 
-    suggestions = _build_suggestions(prompt)
+    suggestions = _build_suggestions(parsed_flags, history)
 
-    reply_lines = [
-        SUPPORT_SYSTEM_PROMPT,
-        "",
-        intro,
-        context_line,
-        f"Here's what I'd suggest based on {user_request}:",
-    ]
-    for item in suggestions[:3]:
-        reply_lines.append(f"- {item}")
+    reply_lines = [SUPPORT_SYSTEM_PROMPT, "", intro]
+    if context_lines:
+        reply_lines.extend(context_lines)
+    reply_lines.append(f"Regarding your request: {request_text}")
+    for suggestion in suggestions:
+        reply_lines.append(f"- {suggestion}")
+    reply_lines.append("I'll stay on this until you're satisfied. Reply with any details you'd like me to handle now.")
 
-    reply_lines.append("We're here to help—just reply to this message if you'd like me to take action now.")
-    reply_text = "\n".join(line for line in reply_lines if line)
+    reply_text = "\n".join([line for line in reply_lines if line])
     return build_text_message(reply_text)
 
 
