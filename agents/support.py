@@ -51,6 +51,19 @@ def _build_suggestions(history: List[Dict[str, Any]]) -> List[str]:
     return suggestions[:3]
 
 
+def _build_upgrade_suggestions() -> List[str]:
+    return [
+        "Confirm which plan you want and whether you prefer monthly or annual billing.",
+        "I’ll review pricing and when the upgrade should take effect, then enable the new features.",
+        "You'll get a confirmation email once the upgrade is applied.",
+    ]
+
+
+def _extract_open_ticket_report(data_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    report = data_context.get("data_context", {}).get("active_customers_with_open_tickets", [])
+    return report if isinstance(report, list) else []
+
+
 def _strip_instruction_preamble(text: str) -> str:
     markers = [
         "You are a friendly customer support representative",
@@ -88,14 +101,31 @@ async def support_skill(message: Message) -> Message:
     reply_lines = [intro]
     if context_lines:
         reply_lines.extend(context_lines)
+    lower_request = request_text.lower()
+    upgrade_request = "upgrade" in lower_request or "upgrad" in lower_request
+    open_ticket_report = _extract_open_ticket_report(data_context)
+
     reply_lines.append(f"Regarding your request: {request_text}")
-    for suggestion in suggestions:
-        reply_lines.append(f"- {suggestion}")
-    reply_lines.append("I'll stay on this until you're satisfied. Reply with any details you'd like me to handle now.")
+    if open_ticket_report:
+        reply_lines.append("Active customers with open tickets:")
+        for entry in open_ticket_report:
+            customer = entry.get("customer", {}) if isinstance(entry, dict) else {}
+            tickets = entry.get("open_tickets", []) if isinstance(entry, dict) else []
+            name = customer.get("name", "Unknown")
+            cid = customer.get("id", "?")
+            reply_lines.append(f"- {name} (ID {cid}): {len(tickets)} open or in-progress tickets")
+
+    if upgrade_request:
+        upgrade_suggestions = _build_upgrade_suggestions()
+        for suggestion in upgrade_suggestions:
+            reply_lines.append(f"- {suggestion}")
+        reply_lines.append("Please share your account name, preferred plan, and any verification details you need me to confirm.")
+    else:
+        for suggestion in suggestions:
+            reply_lines.append(f"- {suggestion}")
+        reply_lines.append("I'll stay on this until you're satisfied. Reply with any details you'd like me to handle now.")
 
     reply_text = "\n".join([line for line in reply_lines if line])
-
-    lower_request = request_text.lower()
     billing_markers = ["refund", "charge", "billing", "payment", "invoice"]
     escalate = any(marker in lower_request for marker in billing_markers)
 

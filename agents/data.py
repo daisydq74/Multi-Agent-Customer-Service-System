@@ -1,6 +1,5 @@
 import json
 import os
-import re
 from typing import Any, Dict, List
 
 import httpx
@@ -26,8 +25,8 @@ async def data_skill(message: Message) -> Message:
         payload = json.loads(prompt)
     except json.JSONDecodeError:
         error_payload = {
-            "tool_calls": [],
-            "summary": "Invalid structured request: expected JSON with request, customer_id, and email.",
+            "handled": False,
+            "reason": "Invalid structured request: expected JSON with request, customer_id, and email.",
         }
         return build_text_message(json.dumps(error_payload))
 
@@ -37,8 +36,9 @@ async def data_skill(message: Message) -> Message:
 
     tool_calls: List[Dict[str, Any]] = []
     summaries: List[str] = []
+    data_context: Dict[str, Any] = {}
 
-    async def run_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    async def run_tool(name: str, arguments: Dict[str, Any]) -> Any:
         try:
             result = await call_mcp(name, arguments)
             summaries.append(f"Executed {name}")
@@ -50,34 +50,43 @@ async def data_skill(message: Message) -> Message:
             return {}
 
     if customer_id and email:
-        await run_tool("update_customer", {"customer_id": customer_id, "data": {"email": email}})
-        await run_tool("get_customer_history", {"customer_id": customer_id})
+        update_result = await run_tool("update_customer", {"customer_id": customer_id, "data": {"email": email}})
+        history_result = await run_tool("get_customer_history", {"customer_id": customer_id})
+        data_context = {
+            "customer_id": customer_id,
+            "email": email,
+            "updated": update_result,
+            "history": history_result,
+        }
     elif customer_id:
-        await run_tool("get_customer", {"customer_id": customer_id})
+        customer_result = await run_tool("get_customer", {"customer_id": customer_id})
+        data_context = {"customer": customer_result}
     else:
-        aggregate_query = bool(re.search(r"\bactive customers\b|\breport\b", request_text, re.IGNORECASE))
-        if aggregate_query:
-            customers_result = await run_tool("list_customers", {"status": "active"})
-            customers = customers_result.get("result", []) if isinstance(customers_result, dict) else []
-            open_ticket_context: List[Dict[str, Any]] = []
-            for customer in customers:
-                cid = customer.get("id") if isinstance(customer, dict) else None
-                if cid is None:
-                    continue
-                history_result = await run_tool("get_customer_history", {"customer_id": cid})
-                records = history_result.get("result", []) if isinstance(history_result, dict) else []
-                open_items = [r for r in records if isinstance(r, dict) and r.get("status") in {"open", "in_progress"}]
-                if open_items:
-                    open_ticket_context.append({"customer": customer, "open_tickets": open_items})
-            if open_ticket_context:
-                summaries.append(f"Found open items for {len(open_ticket_context)} active customers")
+        customers_result = await run_tool("list_customers", {"status": "active", "limit": 50})
+        customers = customers_result.get("result", []) if isinstance(customers_result, dict) else customers_result
+        customers = customers if isinstance(customers, list) else []
+        open_ticket_context: List[Dict[str, Any]] = []
+        for customer in customers:
+            cid = customer.get("id") if isinstance(customer, dict) else None
+            if cid is None:
+                continue
+            history_result = await run_tool("get_customer_history", {"customer_id": cid})
+            records = history_result.get("result", []) if isinstance(history_result, dict) else history_result
+            records = records if isinstance(records, list) else []
+            open_items = [r for r in records if isinstance(r, dict) and r.get("status") in {"open", "in_progress"}]
+            if open_items:
+                open_ticket_context.append({"customer": customer, "open_tickets": open_items})
+        data_context = {"active_customers_with_open_tickets": open_ticket_context}
+        summaries.append(f"Compiled report for {len(open_ticket_context)} active customers with open tickets")
 
     response_payload = {
+        "handled": True,
         "tool_calls": tool_calls,
         "summary": "; ".join(summaries) if summaries else "No tools executed",
         "customer_id": customer_id,
         "email": email,
         "request": request_text,
+        "data_context": data_context,
     }
     return build_text_message(json.dumps(response_payload))
 
