@@ -1,9 +1,16 @@
 import asyncio
 import os
+from typing import List, Tuple
 
 import httpx
+import uvicorn
 
+from agents.billing import app as billing_app
+from agents.data import app as data_app
+from agents.router import app as router_app
+from agents.support import app as support_app
 from langgraph_sdk.types import Message, MessageSendParams, Role
+from mcp_server.app import app as mcp_app
 from shared.message_utils import build_text_message
 
 ROUTER_RPC = os.getenv("ROUTER_RPC", "http://localhost:8010/rpc")
@@ -26,13 +33,34 @@ def print_response(prompt: str, result: dict | None) -> None:
     print()
 
 
-async def main():
+async def start_server(app, port: int, name: str) -> Tuple[uvicorn.Server, asyncio.Task[None]]:
+    """Start a uvicorn server in the background and wait for it to be ready."""
+
+    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    server.install_signal_handlers = lambda: None  # type: ignore[assignment]
+
+    task: asyncio.Task[None] = asyncio.create_task(server.serve())
+    while not server.started:
+        await asyncio.sleep(0.05)
+
+    print(f"{name} started on port {port}")
+    return server, task
+
+
+async def stop_servers(servers: List[Tuple[uvicorn.Server, asyncio.Task[None]]]) -> None:
+    for server, task in servers:
+        server.should_exit = True
+    await asyncio.gather(*(task for _, task in servers), return_exceptions=True)
+
+
+async def run_demo_queries() -> None:
     prompts = [
-        "Customer 1 billing summary and next payment guidance",
-        "Customer 2 has login problems, what should support do?",
-        "Customer history then support guidance",
-        "Open a new high-priority ticket for customer 3 about shipment delay",
-        "List recent active customers and suggest a follow-up action",
+        "Get customer information for ID 5",
+        "I'm customer 12345 and need help upgrading my account",
+        "Show me all active customers who have open tickets",
+        "I'm customer 12345 and I've been charged twice, please refund immediately!",
+        "I'm customer 12345, Update my email to new@email.com and show my ticket history",
     ]
 
     async with httpx.AsyncClient() as client:
@@ -42,6 +70,20 @@ async def main():
             response.raise_for_status()
             result = response.json().get("result")
             print_response(prompt, result)
+
+
+async def main():
+    servers: List[Tuple[uvicorn.Server, asyncio.Task[None]]] = []
+    try:
+        servers.append(await start_server(mcp_app, 8000, "MCP Server"))
+        servers.append(await start_server(data_app, 8011, "Data Agent"))
+        servers.append(await start_server(support_app, 8012, "Support Agent"))
+        servers.append(await start_server(billing_app, 8013, "Billing Agent"))
+        servers.append(await start_server(router_app, 8010, "Router Agent"))
+
+        await run_demo_queries()
+    finally:
+        await stop_servers(servers)
 
 
 if __name__ == "__main__":
