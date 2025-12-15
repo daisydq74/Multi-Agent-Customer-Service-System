@@ -23,6 +23,30 @@ def _extract_context_and_request(prompt: str) -> tuple[str, str]:
     return "", prompt.strip() or "your request"
 
 
+def _summarize_data_context(data: str) -> str:
+    if not data:
+        return ""
+    try:
+        import json
+
+        payload = json.loads(data)
+        result = payload.get("result") if isinstance(payload, dict) else None
+        if isinstance(result, list) and result:
+            latest = result[0]
+            if isinstance(latest, dict):
+                ticket_id = latest.get("id")
+                status = latest.get("status")
+                issue = latest.get("issue") or "recent activity"
+                return f"Latest ticket #{ticket_id} ({status}): {issue}."
+        if isinstance(result, dict):
+            name = result.get("name")
+            status = result.get("status")
+            return f"Account {name or 'record'} is currently {status or 'noted'}."
+    except Exception:
+        return data[:200]
+    return data[:200]
+
+
 def _build_suggestions(prompt: str) -> list[str]:
     lower = prompt.lower()
     suggestions = []
@@ -56,7 +80,7 @@ async def support_skill(message: Message) -> Message:
     elif "ticket" in prompt.lower() or "issue" in prompt.lower():
         context_line = "I see you're dealing with an issue you'd like us to track."
     elif data_context:
-        context_line = "I reviewed the recent account activity and history you mentioned."
+        context_line = _summarize_data_context(data_context)
 
     suggestions = _build_suggestions(prompt)
 

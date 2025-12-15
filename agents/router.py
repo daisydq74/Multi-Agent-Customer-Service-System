@@ -16,8 +16,9 @@ BILLING_AGENT_RPC = os.getenv("BILLING_AGENT_RPC", "http://localhost:8013/rpc")
 
 class RouterState(TypedDict):
     messages: List[str]
-    route: str
+    plan: List[str]
     specialist_responses: List[str]
+    data_context: str
 
 
 async def send_agent_message(agent_rpc_url: str, text: str) -> str:
@@ -47,35 +48,51 @@ def build_graph():
 
     def classify(state: RouterState) -> RouterState:
         user_input = state["messages"][-1].lower()
-        if "billing" in user_input or "refund" in user_input or "payment" in user_input:
-            route = "billing"
-        elif "history" in user_input or "customer" in user_input:
-            route = "data_then_support"
+        plan: List[str] = []
+
+        needs_data = any(keyword in user_input for keyword in ["history", "customer", "account", "id", "ticket"])
+        billing_intent = any(keyword in user_input for keyword in ["billing", "refund", "payment", "invoice"])
+
+        if needs_data:
+            plan.append("data")
+        if billing_intent:
+            plan.append("billing")
         else:
-            route = "support"
-        state["route"] = route
+            plan.append("support")
+
+        state["plan"] = plan
         return state
 
     async def call_specialist(state: RouterState) -> RouterState:
         text = state["messages"][-1]
         responses: List[str] = []
-        if state["route"] == "data_then_support":
-            data_reply = await send_agent_message(DATA_AGENT_RPC, text)
-            support_prompt = f"Data context: {data_reply}. Now craft guidance for the user."
-            support_reply = await send_agent_message(SUPPORT_AGENT_RPC, support_prompt)
-            responses.extend([data_reply, support_reply])
-        elif state["route"] == "billing":
-            billing_reply = await send_agent_message(BILLING_AGENT_RPC, text)
-            responses.append(billing_reply)
-        else:
-            support_reply = await send_agent_message(SUPPORT_AGENT_RPC, text)
-            responses.append(support_reply)
+        data_context = state.get("data_context", "")
+
+        for step in state.get("plan", []):
+            if step == "data":
+                data_reply = await send_agent_message(DATA_AGENT_RPC, text)
+                data_context = data_reply
+                responses.append(data_reply)
+                state["data_context"] = data_context
+            elif step == "billing":
+                billing_prompt = text
+                if data_context:
+                    billing_prompt = f"{text}\n\nData context: {data_context}"
+                billing_reply = await send_agent_message(BILLING_AGENT_RPC, billing_prompt)
+                responses.append(billing_reply)
+            else:
+                support_prompt = text
+                if data_context:
+                    support_prompt = f"Data context: {data_context}\n\n{text}"
+                support_reply = await send_agent_message(SUPPORT_AGENT_RPC, support_prompt)
+                responses.append(support_reply)
         state["specialist_responses"] = responses
         return state
 
     def summarize(state: RouterState) -> RouterState:
         combined = " \n".join(state.get("specialist_responses", []))
-        state["messages"].append(f"Router summary: {combined}")
+        plan_display = " -> ".join(state.get("plan", [])) or "support"
+        state["messages"].append(f"Router summary ({plan_display}): {combined}")
         return state
 
     graph.add_node("classify", classify)
@@ -94,7 +111,12 @@ workflow = build_graph()
 
 
 async def router_skill(message: Message) -> Message:
-    initial_state: RouterState = {"messages": [message.parts[0].text if message.parts else ""], "route": "support", "specialist_responses": []}
+    initial_state: RouterState = {
+        "messages": [message.parts[0].text if message.parts else ""],
+        "plan": ["support"],
+        "specialist_responses": [],
+        "data_context": "",
+    }
     final_state = await workflow.ainvoke(initial_state)
     summary_text = final_state["messages"][-1]
     return build_text_message(summary_text)

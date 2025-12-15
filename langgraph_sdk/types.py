@@ -114,6 +114,15 @@ class AgentCard(BaseModel):
     preferredTransport: Optional[str] = None
 
 
+class TicketHistoryItem(BaseModel):
+    id: int
+    customer_id: int
+    issue: str
+    status: str
+    priority: str
+    created_at: str
+
+
 __all__ = [
     "AgentCard",
     "AgentCapabilities",
@@ -134,4 +143,5 @@ __all__ = [
     "TaskStatus",
     "TaskStatusUpdateEvent",
     "TextPart",
+    "TicketHistoryItem",
 ]
