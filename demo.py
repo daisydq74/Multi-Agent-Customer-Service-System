@@ -61,7 +61,8 @@ async def stop_servers(servers: List[Tuple[uvicorn.Server, asyncio.Task[None]]])
 
 async def run_prompt(prompt: str) -> None:
     request_body = build_request(prompt)
-    async with httpx.AsyncClient() as client:
+    timeout = httpx.Timeout(connect=10.0, read=120.0, write=60.0, pool=60.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(f"http://localhost:{AGENT_PORTS['router']}/rpc", json=request_body)
         response.raise_for_status()
         result = response.json().get("result")

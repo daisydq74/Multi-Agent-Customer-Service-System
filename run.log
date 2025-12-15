@@ -9,17 +9,13 @@ Billing Agent healthy at http://localhost:8013/health
 Router Agent healthy at http://localhost:8010/health
 
 === Prompt: Get customer information for ID 5 ===
-Hi Charlie Brown, I pulled up your account details.
-Account status: active. Email on file: charlie.brown@email.com.
-Regarding your request: Get customer information for ID 5
-- If anything looks off, reply here and I'll take action right away.
-I'll stay on this until you're satisfied. Reply with any details you'd like me to handle now.
+Customer information for ID 5: Name: Charlie Brown, Email: charlie.brown@email.com, Status: Active.
 
 A2A log:
 - Planner -> Router: {"steps": [{"agent": "data", "payload": {"request": "Get customer information for ID 5", "customer_id": 5, "email": null}}, {"agent": "support", "payload": {"request": "Get customer information for ID 5", "customer_id": 5, "email": null, "data_context": {}}}], "final_answer_strategy": "last_step_text"}
 - Router: executing step 1 -> data
 - Router -> Data: context sent
-- Data -> Router: Executed get_customer
+- Data -> Router: {'handled': True, 'tool_calls_executed': [{'tool': 'get_customer', 'args': {'customer_id': 5}, 'result': {'id': 5, 'name': 'Charlie Brown', 'email': 'charlie.brown@email.com', 'status': 'active', 'created_at': '2025-12-15 08:02:03'}}], 'data_context': {'expected_result': 'Customer information for ID 5', 'tool_results': [{'tool': 'get_customer', 'args': {'customer_id': 5}, 'result': {'id': 5, 'name': 'Charlie Brown', 'email': 'charlie.brown@email.com', 'status': 'active', 'created_at': '2025-12-15 08:02:03'}}]}, 'summary': '', 'need_clarification': '', 'logs': ["LLM -> Agent: planned tool_calls=[{'tool_name': 'get_customer', 'args': {'customer_id': 5}}]", "Agent -> MCP: get_customer({'customer_id': 5})", 'MCP -> Agent: success get_customer']}
 - Router: advancing to next step
 - Router: executing step 2 -> support
 - Router -> Support: context sent
@@ -28,17 +24,13 @@ A2A log:
 - Router: finalized response
 
 === Prompt: I'm customer 5 and need help upgrading my account ===
-Hi Charlie Brown, I pulled up your account details.
-Account status: active. Email on file: charlie.brown@email.com.
-Regarding your request: I'm customer 5 and need help upgrading my account
-- If anything looks off, reply here and I'll take action right away.
-I'll stay on this until you're satisfied. Reply with any details you'd like me to handle now.
+Hi Charlie, I see your account is active. Could you please let me know what type of upgrade you're looking for? This will help me assist you better.
 
 A2A log:
 - Planner -> Router: {"steps": [{"agent": "data", "payload": {"request": "I'm customer 5 and need help upgrading my account", "customer_id": 5, "email": null}}, {"agent": "support", "payload": {"request": "I'm customer 5 and need help upgrading my account", "customer_id": 5, "email": null, "data_context": {}}}], "final_answer_strategy": "last_step_text"}
 - Router: executing step 1 -> data
 - Router -> Data: context sent
-- Data -> Router: Executed get_customer
+- Data -> Router: Fetching details for customer 5 to assist with the account upgrade.
 - Router: advancing to next step
 - Router: executing step 2 -> support
 - Router -> Support: context sent
@@ -47,18 +39,13 @@ A2A log:
 - Router: finalized response
 
 === Prompt: Show me all active customers who have open tickets ===
-Hi there, thanks for reaching out.
-Latest open ticket #1: Cannot login to account (status open).
-Regarding your request: Show me all active customers who have open tickets
-- I can follow up on any of the open tickets listed above.
-- If anything looks off, reply here and I'll take action right away.
-I'll stay on this until you're satisfied. Reply with any details you'd like me to handle now.
+I am checking the ticket status for all active customers. Please hold on for a moment.
 
 A2A log:
 - Planner -> Router: {"steps": [{"agent": "data", "payload": {"request": "Show me all active customers who have open tickets", "customer_id": null, "email": null}}, {"agent": "support", "payload": {"request": "Show me all active customers who have open tickets", "customer_id": null, "email": null, "data_context": {}}}], "final_answer_strategy": "last_step_text"}
 - Router: executing step 1 -> data
 - Router -> Data: context sent
-- Data -> Router: Executed list_customers; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Executed get_customer_history; Compiled report for 12 active customers with open tickets
+- Data -> Router: Fetching active customers to check for open tickets.
 - Router: advancing to next step
 - Router: executing step 2 -> support
 - Router -> Support: context sent
@@ -67,13 +54,13 @@ A2A log:
 - Router: finalized response
 
 === Prompt: I've been charged twice, please refund immediately! I'm customer 1 ===
-Billing support on it. Account 1 (new@email.com) noted. Issue details: refund request Request: I've been charged twice, please refund immediately! I'm customer 1 Next steps: we'll verify the transactions, apply necessary refunds, and confirm once resolved.
+A support ticket has been created for your refund request due to double charge. We will process it as soon as possible.
 
 A2A log:
-- Planner -> Router: {"steps": [{"agent": "data", "payload": {"request": "I've been charged twice, please refund immediately! I'm customer 1", "customer_id": 1, "email": null}}, {"agent": "billing", "payload": {"request": "I've been charged twice, please refund immediately! I'm customer 1", "data_context": {}, "billing_issue": "refund request"}}], "final_answer_strategy": "last_step_text"}
+- Planner -> Router: {"steps": [{"agent": "data", "payload": {"request": "I've been charged twice, please refund immediately! I'm customer 1", "customer_id": 1}}, {"agent": "billing", "payload": {"request": "I've been charged twice, please refund immediately! I'm customer 1", "data_context": {}, "billing_issue": "refund request"}}], "final_answer_strategy": "last_step_text"}
 - Router: executing step 1 -> data
 - Router -> Data: context sent
-- Data -> Router: Executed get_customer
+- Data -> Router: A support ticket has been created for your refund request due to double charge.
 - Router: advancing to next step
 - Router: executing step 2 -> billing
 - Router -> Billing: context sent
@@ -82,16 +69,25 @@ A2A log:
 - Router: finalized response
 
 === Prompt: Update my email to new@email.com and show my ticket history for customer 1 ===
-Executed get_customer
+Your email has been updated to new@email.com. Here’s your ticket history:
+1. Refund request due to double charge - Status: Open, Priority: High
+2. Refund request due to double charge - Status: Open, Priority: High
+3. Charged twice, requesting immediate refund - Status: Open, Priority: High
+4. Cannot login to account - Status: Open, Priority: High
+5. Password reset not working - Status: In Progress, Priority: Medium
 
 A2A log:
-- Planner -> Router: {"steps": [{"agent": "data", "payload": {"request": "Update my email to new@email.com", "customer_id": 1, "email": "new@email.com"}}, {"agent": "data", "payload": {"request": "Show my ticket history for customer 1", "customer_id": 1}}], "final_answer_strategy": "last_step_text"}
+- Planner -> Router: {"steps": [{"agent": "data", "payload": {"request": "Update my email to new@email.com", "customer_id": 1, "email": "new@email.com"}}, {"agent": "data", "payload": {"request": "Show my ticket history for customer 1", "customer_id": 1}}, {"agent": "support", "payload": {"request": "Update my email to new@email.com and show my ticket history for customer 1", "customer_id": 1, "email": "new@email.com", "data_context": {}}}], "final_answer_strategy": "last_step_text"}
 - Router: executing step 1 -> data
 - Router -> Data: context sent
-- Data -> Router: Executed update_customer; Executed get_customer_history
+- Data -> Router: Your email has been updated to new@email.com, and your ticket history for customer 1 will be retrieved.
 - Router: advancing to next step
 - Router: executing step 2 -> data
 - Router -> Data: context sent
-- Data -> Router: Executed get_customer
+- Data -> Router: Your email has been updated to new@email.com and your ticket history for customer 1 will be retrieved.
+- Router: advancing to next step
+- Router: executing step 3 -> support
+- Router -> Support: context sent
+- Support -> Router: response captured
 - Router: advancing to next step
 - Router: finalized response
