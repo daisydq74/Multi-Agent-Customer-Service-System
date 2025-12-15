@@ -55,6 +55,17 @@ def _build_suggestions(flags: Dict[str, Any], history: List[Dict[str, Any]]) -> 
     return suggestions[:3]
 
 
+def _strip_instruction_preamble(text: str) -> str:
+    markers = [
+        "You are a friendly customer support representative",
+        "Do not mention internal routing",
+    ]
+    header, sep, rest = text.partition("\n\n")
+    if sep and any(marker in header for marker in markers):
+        return rest or header
+    return text
+
+
 async def support_skill(message: Message) -> Message:
     prompt = message.parts[0].text if message.parts else ""
     request_text, parsed_flags, data_results = _extract_payload(prompt)
@@ -78,7 +89,7 @@ async def support_skill(message: Message) -> Message:
 
     suggestions = _build_suggestions(parsed_flags, history)
 
-    reply_lines = [SUPPORT_SYSTEM_PROMPT, "", intro]
+    reply_lines = [intro]
     if context_lines:
         reply_lines.extend(context_lines)
     reply_lines.append(f"Regarding your request: {request_text}")
@@ -87,7 +98,7 @@ async def support_skill(message: Message) -> Message:
     reply_lines.append("I'll stay on this until you're satisfied. Reply with any details you'd like me to handle now.")
 
     reply_text = "\n".join([line for line in reply_lines if line])
-    return build_text_message(reply_text)
+    return build_text_message(_strip_instruction_preamble(reply_text))
 
 
 def build_agent_card() -> AgentCard:

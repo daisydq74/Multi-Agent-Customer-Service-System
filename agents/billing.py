@@ -28,6 +28,17 @@ def _extract_customer_info(data_results: List[Dict[str, Any]]) -> Dict[str, Any]
     return {}
 
 
+def _strip_instruction_preamble(text: str) -> str:
+    markers = [
+        "Billing Agent:",
+        "Do not mention internal routing",
+    ]
+    header, sep, rest = text.partition("\n\n")
+    if sep and any(marker in header for marker in markers):
+        return rest or header
+    return text
+
+
 async def billing_skill(message: Message) -> Message:
     prompt = message.parts[0].text if message.parts else ""
     request, flags, data_results, ticket_created = _parse_payload(prompt)
@@ -45,7 +56,8 @@ async def billing_skill(message: Message) -> Message:
     lines.append(f"Request: {request}")
     lines.append("Next steps: we'll verify the transactions, apply necessary refunds, and confirm once resolved.")
 
-    return build_text_message(" ".join(lines))
+    reply_text = " ".join(lines)
+    return build_text_message(_strip_instruction_preamble(reply_text))
 
 
 def build_agent_card() -> AgentCard:
