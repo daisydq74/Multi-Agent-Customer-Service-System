@@ -1,9 +1,6 @@
 Connected to database: support.db
 Tables created successfully!
 Triggers created successfully!
-Sample data inserted successfully!
-  - 15 customers added
-  - 25 tickets added
 Database connection closed.
 MCP Server healthy at http://localhost:8000/health
 Data Agent healthy at http://localhost:8011/health
@@ -28,10 +25,8 @@ A2A log:
 Hi Charlie Brown, I pulled up your account details.
 Account status: active. Email on file: charlie.brown@email.com.
 Regarding your request: I'm customer 5 and need help upgrading my account
-- Confirm which plan you want and whether you prefer monthly or annual billing.
-- I’ll review pricing and when the upgrade should take effect, then enable the new features.
-- You'll get a confirmation email once the upgrade is applied.
-Please share your account name, preferred plan, and any verification details you need me to confirm.
+- If anything looks off, reply here and I'll take action right away.
+I'll stay on this until you're satisfied. Reply with any details you'd like me to handle now.
 
 A2A log:
 - Router -> Data: context sent
@@ -43,19 +38,6 @@ A2A log:
 Hi there, thanks for reaching out.
 Latest open ticket #1: Cannot login to account (status open).
 Regarding your request: Show me all active customers who have open tickets
-Active customers with open tickets:
-- John Doe (ID 1): 2 open or in-progress tickets
-- Jane Smith (ID 2): 1 open or in-progress tickets
-- Alice Williams (ID 4): 2 open or in-progress tickets
-- Charlie Brown (ID 5): 1 open or in-progress tickets
-- Diana Prince (ID 6): 2 open or in-progress tickets
-- Edward Norton (ID 7): 1 open or in-progress tickets
-- George Miller (ID 9): 1 open or in-progress tickets
-- Hannah Lee (ID 10): 2 open or in-progress tickets
-- Isaac Newton (ID 11): 1 open or in-progress tickets
-- Julia Roberts (ID 12): 2 open or in-progress tickets
-- Laura Martinez (ID 14): 1 open or in-progress tickets
-- Michael Scott (ID 15): 1 open or in-progress tickets
 - I can follow up on any of the open tickets listed above.
 - If anything looks off, reply here and I'll take action right away.
 I'll stay on this until you're satisfied. Reply with any details you'd like me to handle now.
@@ -67,7 +49,7 @@ A2A log:
 - Support -> Router: response captured
 
 === Prompt: I've been charged twice, please refund immediately! I'm customer 1 ===
-Billing support on it. Account 1 (john.doe@example.com) noted. Issue details: I've been charged twice, please refund immediately! I'm customer 1 Request: I've been charged twice, please refund immediately! I'm customer 1 Next steps: we'll verify the transactions, apply necessary refunds, and confirm once resolved.
+Billing support on it. Account 1 (new@email.com) noted. Issue details: I've been charged twice, please refund immediately! I'm customer 1 Request: I've been charged twice, please refund immediately! I'm customer 1 Next steps: we'll verify the transactions, apply necessary refunds, and confirm once resolved.
 
 A2A log:
 - Router -> Data: context sent
