@@ -16,19 +16,6 @@ class DatabaseSetup:
         self.conn = None
         self.cursor = None
 
-    def initialize(self):
-        """Create database schema and seed sample data if empty."""
-
-        self.connect()
-        self.create_tables()
-        self.create_triggers()
-
-        self.cursor.execute("SELECT COUNT(*) FROM customers")
-        if self.cursor.fetchone()[0] == 0:
-            self.insert_sample_data()
-
-        self.close()
-
     def connect(self):
         """Establish database connection."""
         self.conn = sqlite3.connect(self.db_path)
@@ -124,12 +111,6 @@ class DatabaseSetup:
             VALUES (?, ?, ?, ?)
         """, customers)
 
-        # Ensure a synthetic record for customer id 12345 used in demos
-        self.cursor.execute(
-            "INSERT INTO customers (id, name, email, phone, status) VALUES (?,?,?,?,?)",
-            (12345, "Demo VIP", "vip.customer@example.com", "+1-555-9999", "active"),
-        )
-
         # Sample tickets (25 tickets with various statuses and priorities)
         tickets = [
             # High priority tickets
@@ -162,7 +143,6 @@ class DatabaseSetup:
             (15, "Question about pricing plans", "resolved", "low"),
             (4, "Feature request: integration with Slack", "open", "low"),
             (10, "Suggestion: add keyboard shortcuts", "open", "low"),
-            (12345, "Requested upgrade review", "open", "medium"),
         ]
 
         self.cursor.executemany("""
