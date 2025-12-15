@@ -21,8 +21,11 @@ async def call_mcp(tool: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def parse_customer_id(text: str) -> Optional[int]:
-    match = re.search(r"(?:customer\\s*id|id)\s*[:#]?\s*(\\d+)", text, re.IGNORECASE)
-    return int(match.group(1)) if match else None
+    match = re.search(r"(?:customer\\s*id|id)\s*[:#]?\s*(\\d+)|customer\\s+(\\d+)", text, re.IGNORECASE)
+    if not match:
+        return None
+    matched_id = next((group for group in match.groups() if group), None)
+    return int(matched_id) if matched_id else None
 
 
 def parse_email(text: str) -> Optional[str]:
@@ -51,13 +54,26 @@ def parse_priority(text: str) -> str:
 
 
 async def data_skill(message: Message) -> Message:
-    prompt = message.parts[0].text if message.parts else ""
-    lower_prompt = prompt.lower()
+    raw_text = message.parts[0].text if message.parts else ""
+    prompt = raw_text
+    lower_prompt = raw_text.lower()
+    provided_customer_id: Optional[int] = None
+    provided_email: Optional[str] = None
 
-    customer_id = parse_customer_id(prompt)
+    try:
+        payload = json.loads(raw_text)
+        if isinstance(payload, dict):
+            prompt = str(payload.get("user_text", raw_text))
+            lower_prompt = prompt.lower()
+            provided_customer_id = payload.get("customer_id") if isinstance(payload.get("customer_id"), int) else None
+            provided_email = payload.get("new_email") if isinstance(payload.get("new_email"), str) else None
+    except Exception:
+        prompt = raw_text
+
+    customer_id = provided_customer_id if provided_customer_id is not None else parse_customer_id(prompt)
     status = parse_status(prompt)
     limit = parse_limit(prompt)
-    email = parse_email(prompt)
+    email = provided_email if provided_email is not None else parse_email(prompt)
     priority = parse_priority(prompt)
 
     tool = ""
@@ -71,13 +87,19 @@ async def data_skill(message: Message) -> Message:
         else:
             tool = "get_customer_history"
             args = {"customer_id": customer_id}
-            result = await call_mcp(tool, args)
-            summary = f"History fetched for customer {customer_id}"
+            try:
+                result = await call_mcp(tool, args)
+                summary = f"History fetched for customer {customer_id}"
+            except httpx.HTTPStatusError as exc:
+                summary = f"History lookup failed ({exc.response.status_code})."
     elif "list" in lower_prompt:
         tool = "list_customers"
         args = {"status": status, "limit": limit}
-        result = await call_mcp(tool, args)
-        summary = f"Listed {len(result)} customers"
+        try:
+            result = await call_mcp(tool, args)
+            summary = f"Listed {len(result)} customers"
+        except httpx.HTTPStatusError as exc:
+            summary = f"Customer listing failed ({exc.response.status_code})."
     elif "update" in lower_prompt or "change" in lower_prompt:
         if customer_id is None:
             summary = "No customer id provided for update."
@@ -90,24 +112,33 @@ async def data_skill(message: Message) -> Message:
             else:
                 tool = "update_customer"
                 args = {"customer_id": customer_id, "data": update_fields}
-                result = await call_mcp(tool, args)
-                summary = f"Updated customer {customer_id}"
+                try:
+                    result = await call_mcp(tool, args)
+                    summary = f"Updated customer {customer_id}"
+                except httpx.HTTPStatusError as exc:
+                    summary = f"Update failed ({exc.response.status_code}) for customer {customer_id}."
     elif "ticket" in lower_prompt or "issue" in lower_prompt:
         if customer_id is None:
             summary = "No customer id provided for ticket creation."
         else:
             tool = "create_ticket"
             args = {"customer_id": customer_id, "issue": prompt, "priority": priority}
-            result = await call_mcp(tool, args)
-            summary = f"Created ticket for customer {customer_id}"
+            try:
+                result = await call_mcp(tool, args)
+                summary = f"Created ticket for customer {customer_id}"
+            except httpx.HTTPStatusError as exc:
+                summary = f"Ticket creation failed ({exc.response.status_code}) for customer {customer_id}."
     else:
         if customer_id is None:
             summary = "No customer id provided for lookup."
         else:
             tool = "get_customer"
             args = {"customer_id": customer_id}
-            result = await call_mcp(tool, args)
-            summary = f"Fetched customer {customer_id}"
+            try:
+                result = await call_mcp(tool, args)
+                summary = f"Fetched customer {customer_id}"
+            except httpx.HTTPStatusError as exc:
+                summary = f"Lookup failed ({exc.response.status_code}) for customer {customer_id}."
 
     response_payload = {"tool": tool or "none", "args": args, "result": result, "summary": summary}
     return build_text_message(json.dumps(response_payload))

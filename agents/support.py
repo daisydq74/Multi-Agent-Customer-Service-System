@@ -31,6 +31,8 @@ def _summarize_data_context(data: str) -> str:
 
         payload = json.loads(data)
         result = payload.get("result") if isinstance(payload, dict) else None
+        if isinstance(payload, dict) and payload.get("summary"):
+            return str(payload["summary"])
         if isinstance(result, list) and result:
             latest = result[0]
             if isinstance(latest, dict):
@@ -85,8 +87,6 @@ async def support_skill(message: Message) -> Message:
     suggestions = _build_suggestions(prompt)
 
     reply_lines = [
-        SUPPORT_SYSTEM_PROMPT,
-        "",
         intro,
         context_line,
         f"Here's what I'd suggest based on {user_request}:",
