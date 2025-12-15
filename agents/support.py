@@ -16,27 +16,26 @@ SUPPORT_SYSTEM_PROMPT = (
 )
 
 
-def _extract_payload(prompt: str) -> Tuple[str, Dict[str, Any], List[Dict[str, Any]]]:
+def _extract_payload(prompt: str) -> Tuple[str, Dict[str, Any]]:
     try:
         payload = json.loads(prompt)
         request = payload.get("request", "your request")
-        parsed_flags = payload.get("parsed_flags", {})
-        data_results = payload.get("data_results", [])
-        return str(request), parsed_flags if isinstance(parsed_flags, dict) else {}, data_results if isinstance(data_results, list) else []
+        data_context = payload.get("data_context", {}) if isinstance(payload, dict) else {}
+        return str(request), data_context if isinstance(data_context, dict) else {}
     except json.JSONDecodeError:
-        return prompt or "your request", {}, []
+        return prompt or "your request", {}
 
 
-def _extract_customer_details(data_results: List[Dict[str, Any]]) -> Dict[str, Any]:
-    for item in data_results:
+def _extract_customer_details(data_context: Dict[str, Any]) -> Dict[str, Any]:
+    for item in data_context.get("tool_calls", []):
         if item.get("tool") == "get_customer":
             result = item.get("result", {})
             return result.get("result", result) if isinstance(result, dict) else result
     return {}
 
 
-def _extract_recent_history(data_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    for item in data_results:
+def _extract_recent_history(data_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    for item in data_context.get("tool_calls", []):
         if item.get("tool") == "get_customer_history":
             result = item.get("result", {})
             history = result.get("result", result) if isinstance(result, dict) else result
@@ -44,13 +43,10 @@ def _extract_recent_history(data_results: List[Dict[str, Any]]) -> List[Dict[str
     return []
 
 
-def _build_suggestions(flags: Dict[str, Any], history: List[Dict[str, Any]]) -> List[str]:
+def _build_suggestions(history: List[Dict[str, Any]]) -> List[str]:
     suggestions: List[str] = []
-    if flags.get("needs_upgrade_help"):
-        suggestions.append("We can enable the upgraded plan on your account and confirm pricing before applying it.")
-        suggestions.append("If you have preferences (billing cycle, feature set), share them and I'll tailor the upgrade.")
-    if flags.get("wants_ticket_history") and history:
-        suggestions.append("I've reviewed your open items above and can follow up on any unresolved tickets immediately.")
+    if history:
+        suggestions.append("I can follow up on any of the open tickets listed above.")
     suggestions.append("If anything looks off, reply here and I'll take action right away.")
     return suggestions[:3]
 
@@ -68,9 +64,9 @@ def _strip_instruction_preamble(text: str) -> str:
 
 async def support_skill(message: Message) -> Message:
     prompt = message.parts[0].text if message.parts else ""
-    request_text, parsed_flags, data_results = _extract_payload(prompt)
-    customer = _extract_customer_details(data_results)
-    history = _extract_recent_history(data_results)
+    request_text, data_context = _extract_payload(prompt)
+    customer = _extract_customer_details(data_context)
+    history = _extract_recent_history(data_context)
 
     intro = "Hi there, thanks for reaching out."
     if customer:
@@ -87,7 +83,7 @@ async def support_skill(message: Message) -> Message:
             latest = open_items[0]
             context_lines.append(f"Latest open ticket #{latest.get('id')}: {latest.get('issue')} (status {latest.get('status')}).")
 
-    suggestions = _build_suggestions(parsed_flags, history)
+    suggestions = _build_suggestions(history)
 
     reply_lines = [intro]
     if context_lines:
@@ -98,7 +94,17 @@ async def support_skill(message: Message) -> Message:
     reply_lines.append("I'll stay on this until you're satisfied. Reply with any details you'd like me to handle now.")
 
     reply_text = "\n".join([line for line in reply_lines if line])
-    return build_text_message(_strip_instruction_preamble(reply_text))
+
+    lower_request = request_text.lower()
+    billing_markers = ["refund", "charge", "billing", "payment", "invoice"]
+    escalate = any(marker in lower_request for marker in billing_markers)
+
+    response_payload = {
+        "reply": _strip_instruction_preamble(reply_text),
+        "escalate_to_billing": escalate,
+        "billing_issue": request_text if escalate else "",
+    }
+    return build_text_message(json.dumps(response_payload))
 
 
 def build_agent_card() -> AgentCard:

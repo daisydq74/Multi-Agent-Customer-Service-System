@@ -1,6 +1,7 @@
 import json
 import os
-from typing import Any, Dict
+import re
+from typing import Any, Dict, List
 
 import httpx
 from fastapi import FastAPI
@@ -25,35 +26,59 @@ async def data_skill(message: Message) -> Message:
         payload = json.loads(prompt)
     except json.JSONDecodeError:
         error_payload = {
-            "tool": "none",
-            "args": {},
-            "result": {},
-            "summary": "Invalid structured request: expected JSON with 'tool' and 'args'.",
+            "tool_calls": [],
+            "summary": "Invalid structured request: expected JSON with request, customer_id, and email.",
         }
         return build_text_message(json.dumps(error_payload))
 
-    tool = payload.get("tool")
-    args: Dict[str, Any] = payload.get("args", {}) if isinstance(payload, dict) else {}
+    request_text: str = payload.get("request", "")
+    customer_id = payload.get("customer_id")
+    email = payload.get("email")
 
-    if not tool:
-        response_payload = {
-            "tool": "none",
-            "args": args,
-            "result": {},
-            "summary": "Missing tool in request.",
-        }
-        return build_text_message(json.dumps(response_payload))
+    tool_calls: List[Dict[str, Any]] = []
+    summaries: List[str] = []
 
-    result: Dict[str, Any] | Any = {}
-    summary = ""
+    async def run_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            result = await call_mcp(name, arguments)
+            summaries.append(f"Executed {name}")
+            tool_calls.append({"tool": name, "args": arguments, "result": result})
+            return result
+        except Exception as exc:  # noqa: BLE001
+            summaries.append(f"Failed {name}: {exc}")
+            tool_calls.append({"tool": name, "args": arguments, "result": {"error": str(exc)}})
+            return {}
 
-    try:
-        result = await call_mcp(tool, args)
-        summary = f"Executed {tool}"
-    except Exception as exc:  # noqa: BLE001
-        summary = f"Failed to execute {tool}: {exc}"
+    if customer_id and email:
+        await run_tool("update_customer", {"customer_id": customer_id, "data": {"email": email}})
+        await run_tool("get_customer_history", {"customer_id": customer_id})
+    elif customer_id:
+        await run_tool("get_customer", {"customer_id": customer_id})
+    else:
+        aggregate_query = bool(re.search(r"\bactive customers\b|\breport\b", request_text, re.IGNORECASE))
+        if aggregate_query:
+            customers_result = await run_tool("list_customers", {"status": "active"})
+            customers = customers_result.get("result", []) if isinstance(customers_result, dict) else []
+            open_ticket_context: List[Dict[str, Any]] = []
+            for customer in customers:
+                cid = customer.get("id") if isinstance(customer, dict) else None
+                if cid is None:
+                    continue
+                history_result = await run_tool("get_customer_history", {"customer_id": cid})
+                records = history_result.get("result", []) if isinstance(history_result, dict) else []
+                open_items = [r for r in records if isinstance(r, dict) and r.get("status") in {"open", "in_progress"}]
+                if open_items:
+                    open_ticket_context.append({"customer": customer, "open_tickets": open_items})
+            if open_ticket_context:
+                summaries.append(f"Found open items for {len(open_ticket_context)} active customers")
 
-    response_payload = {"tool": tool, "args": args, "result": result, "summary": summary}
+    response_payload = {
+        "tool_calls": tool_calls,
+        "summary": "; ".join(summaries) if summaries else "No tools executed",
+        "customer_id": customer_id,
+        "email": email,
+        "request": request_text,
+    }
     return build_text_message(json.dumps(response_payload))
 
 
