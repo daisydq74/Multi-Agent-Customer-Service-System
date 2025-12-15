@@ -20,6 +20,8 @@ def _context_summary(raw: str) -> str:
     try:
         payload = json.loads(raw)
         if isinstance(payload, dict):
+            if payload.get("summary"):
+                return str(payload["summary"])
             result = payload.get("result")
             if isinstance(result, dict):
                 status = result.get("status")

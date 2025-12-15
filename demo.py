@@ -29,7 +29,14 @@ def print_response(prompt: str, result: dict | None) -> None:
     if not result:
         print("No result returned")
     else:
-        print("Router task result:", result)
+        history = result.get("history") or []
+        final_text = ""
+        if history:
+            reply = history[-1]
+            parts = reply.get("parts") or []
+            if parts and isinstance(parts[0], dict):
+                final_text = parts[0].get("text", "")
+        print(f"Final Answer: {final_text or 'No reply received'}")
     print()
 
 
@@ -59,8 +66,8 @@ async def run_demo_queries() -> None:
         "Get customer information for ID 5",
         "I'm customer 12345 and need help upgrading my account",
         "Show me all active customers who have open tickets",
-        "I'm customer 12345 and I've been charged twice, please refund immediately!",
-        "I'm customer 12345, Update my email to new@email.com and show my ticket history",
+        "I'm customer 5 and I've been charged twice, please refund immediately!",
+        "I'm customer 5, Update my email to new@email.com and show my ticket history",
     ]
 
     async with httpx.AsyncClient() as client:

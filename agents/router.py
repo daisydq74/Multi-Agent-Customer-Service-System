@@ -1,5 +1,8 @@
+import json
+import logging
 import os
-from typing import List, TypedDict
+import re
+from typing import Dict, List, Optional, TypedDict
 
 import httpx
 from fastapi import FastAPI
@@ -8,6 +11,8 @@ from langgraph.graph import StateGraph, END
 from langgraph_sdk.types import AgentCard, AgentCapabilities, AgentProvider, AgentSkill, Message, MessageSendParams, Role, Task
 from shared.a2a_handler import SimpleAgentRequestHandler, register_agent_routes
 from shared.message_utils import build_text_message
+
+logger = logging.getLogger(__name__)
 
 DATA_AGENT_RPC = os.getenv("DATA_AGENT_RPC", "http://localhost:8011/rpc")
 SUPPORT_AGENT_RPC = os.getenv("SUPPORT_AGENT_RPC", "http://localhost:8012/rpc")
@@ -19,15 +24,52 @@ class RouterState(TypedDict):
     plan: List[str]
     specialist_responses: List[str]
     data_context: str
+    user_text: str
+    responses: Dict[str, str]
+    parsed_request: Dict[str, Optional[str | int]]
+    debug: List[str]
 
 
-async def send_agent_message(agent_rpc_url: str, text: str) -> str:
+def get_last_user_text_from_history(history: List[Message]) -> str:
+    for message in reversed(history):
+        if message.role == Role.user:
+            return "".join(part.text for part in message.parts or [] if getattr(part, "text", None))
+    return ""
+
+
+def parse_request(user_text: str) -> Dict[str, Optional[str | int]]:
+    customer_id: Optional[int] = None
+    new_email: Optional[str] = None
+
+    id_match = re.search(r"(?:customer\s*)?id\s*[:#]?\s*(\d+)|customer\s+(\d+)", user_text, re.IGNORECASE)
+    if id_match:
+        matched_id = next((group for group in id_match.groups() if group), None)
+        if matched_id:
+            customer_id = int(matched_id)
+
+    email_match = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", user_text)
+    if email_match:
+        new_email = email_match.group(0)
+
+    return {"customer_id": customer_id, "new_email": new_email}
+
+
+async def send_agent_message(agent_rpc_url: str, payload: str | Dict[str, object]) -> str:
+    if isinstance(payload, dict):
+        text_payload = json.dumps(payload)
+    else:
+        text_payload = payload
+
     payload = {
         "jsonrpc": "2.0",
         "id": os.urandom(8).hex(),
         "method": "message/send",
         "params": MessageSendParams(
-            message=Message(messageId=os.urandom(8).hex(), role=Role.user, parts=[build_text_message(text, role=Role.user).parts[0]])
+            message=Message(
+                messageId=os.urandom(8).hex(),
+                role=Role.user,
+                parts=[build_text_message(text_payload, role=Role.user).parts[0]],
+            )
         ).model_dump(),
     }
     async with httpx.AsyncClient() as client:
@@ -47,7 +89,7 @@ def build_graph():
     graph = StateGraph(RouterState)
 
     def classify(state: RouterState) -> RouterState:
-        user_input = state["messages"][-1].lower()
+        user_input = state.get("user_text", state["messages"][-1]).lower()
         plan: List[str] = []
 
         needs_data = any(keyword in user_input for keyword in ["history", "customer", "account", "id", "ticket"])
@@ -64,35 +106,54 @@ def build_graph():
         return state
 
     async def call_specialist(state: RouterState) -> RouterState:
-        text = state["messages"][-1]
+        text = state.get("user_text", state["messages"][-1])
         responses: List[str] = []
         data_context = state.get("data_context", "")
+        parsed_request = state.get("parsed_request", {})
+        structured_payload = {
+            "user_text": text,
+            "customer_id": parsed_request.get("customer_id"),
+            "new_email": parsed_request.get("new_email"),
+            "request_id": state.get("request_id"),
+            "context_id": state.get("context_id"),
+        }
+        responses_by_agent: Dict[str, str] = state.get("responses", {})
 
         for step in state.get("plan", []):
             if step == "data":
-                data_reply = await send_agent_message(DATA_AGENT_RPC, text)
+                try:
+                    data_reply = await send_agent_message(DATA_AGENT_RPC, structured_payload)
+                except Exception:
+                    logger.warning("Data agent JSON payload failed, falling back to text")
+                    data_reply = await send_agent_message(DATA_AGENT_RPC, text)
                 data_context = data_reply
                 responses.append(data_reply)
                 state["data_context"] = data_context
+                responses_by_agent["data"] = data_reply
             elif step == "billing":
                 billing_prompt = text
                 if data_context:
                     billing_prompt = f"{text}\n\nData context: {data_context}"
                 billing_reply = await send_agent_message(BILLING_AGENT_RPC, billing_prompt)
                 responses.append(billing_reply)
+                responses_by_agent["billing"] = billing_reply
             else:
                 support_prompt = text
                 if data_context:
-                    support_prompt = f"Data context: {data_context}\n\n{text}"
+                    support_prompt = f"{text}\n\nData context: {data_context}"
                 support_reply = await send_agent_message(SUPPORT_AGENT_RPC, support_prompt)
                 responses.append(support_reply)
+                responses_by_agent["support"] = support_reply
         state["specialist_responses"] = responses
+        state["responses"] = responses_by_agent
         return state
 
     def summarize(state: RouterState) -> RouterState:
         combined = " \n".join(state.get("specialist_responses", []))
         plan_display = " -> ".join(state.get("plan", [])) or "support"
-        state["messages"].append(f"Router summary ({plan_display}): {combined}")
+        debug_summary = f"Router summary ({plan_display}): {combined}"
+        logger.info(debug_summary)
+        state.setdefault("debug", []).append(debug_summary)
         return state
 
     graph.add_node("classify", classify)
@@ -111,15 +172,30 @@ workflow = build_graph()
 
 
 async def router_skill(message: Message) -> Message:
+    user_text = "".join(part.text for part in message.parts or [] if getattr(part, "text", None))
+    history = getattr(message, "history", None)
+    if isinstance(history, list):
+        history_text = get_last_user_text_from_history(history)
+        if history_text:
+            user_text = history_text
+
+    parsed_request = parse_request(user_text)
     initial_state: RouterState = {
-        "messages": [message.parts[0].text if message.parts else ""],
+        "messages": [user_text],
         "plan": ["support"],
         "specialist_responses": [],
         "data_context": "",
+        "user_text": user_text,
+        "responses": {},
+        "parsed_request": parsed_request,
+        "debug": [],
     }
     final_state = await workflow.ainvoke(initial_state)
-    summary_text = final_state["messages"][-1]
-    return build_text_message(summary_text)
+    responses = final_state.get("responses", {})
+    final_reply = responses.get("support") or responses.get("billing") or responses.get("data") or ""
+    if not final_reply and final_state.get("specialist_responses"):
+        final_reply = final_state["specialist_responses"][-1]
+    return build_text_message(final_reply)
 
 
 def build_agent_card() -> AgentCard:
