@@ -77,10 +77,10 @@ async def run_prompt(prompt: str) -> None:
 async def run_demo_queries() -> None:
     prompts = [
         "Get customer information for ID 5",
-        "I'm customer 12345 and need help upgrading my account",
+        "I'm customer 5 and need help upgrading my account",
         "Show me all active customers who have open tickets",
-        "I've been charged twice, please refund immediately! I'm customer 12345",
-        "Update my email to new@email.com and show my ticket history for customer 12345",
+        "I've been charged twice, please refund immediately! I'm customer 1",
+        "Update my email to new@email.com and show my ticket history for customer 1",
     ]
     for prompt in prompts:
         await run_prompt(prompt)
