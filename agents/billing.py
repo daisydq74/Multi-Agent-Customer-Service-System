@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from fastapi import FastAPI
 
@@ -8,20 +8,19 @@ from shared.a2a_handler import SimpleAgentRequestHandler, register_agent_routes
 from shared.message_utils import build_text_message
 
 
-def _parse_payload(prompt: str) -> tuple[str, Dict[str, Any], List[Dict[str, Any]], bool]:
+def _parse_payload(prompt: str) -> tuple[str, Dict[str, Any], str]:
     try:
         payload = json.loads(prompt)
         request = payload.get("request", "Billing question")
-        flags = payload.get("parsed_flags", {}) if isinstance(payload, dict) else {}
-        data_results = payload.get("data_results", []) if isinstance(payload, dict) else []
-        ticket_created = bool(payload.get("ticket_created"))
-        return str(request), flags if isinstance(flags, dict) else {}, data_results if isinstance(data_results, list) else [], ticket_created
+        data_context = payload.get("data_context", {}) if isinstance(payload, dict) else {}
+        billing_issue = payload.get("billing_issue", "") if isinstance(payload, dict) else ""
+        return str(request), data_context if isinstance(data_context, dict) else {}, billing_issue
     except json.JSONDecodeError:
-        return prompt or "Billing question", {}, [], False
+        return prompt or "Billing question", {}, ""
 
 
-def _extract_customer_info(data_results: List[Dict[str, Any]]) -> Dict[str, Any]:
-    for item in data_results:
+def _extract_customer_info(data_context: Dict[str, Any]) -> Dict[str, Any]:
+    for item in data_context.get("tool_calls", []):
         if item.get("tool") == "get_customer":
             result = item.get("result", {})
             return result.get("result", result) if isinstance(result, dict) else result
@@ -41,18 +40,16 @@ def _strip_instruction_preamble(text: str) -> str:
 
 async def billing_skill(message: Message) -> Message:
     prompt = message.parts[0].text if message.parts else ""
-    request, flags, data_results, ticket_created = _parse_payload(prompt)
-    customer = _extract_customer_info(data_results)
+    request, data_context, billing_issue = _parse_payload(prompt)
+    customer = _extract_customer_info(data_context)
 
     lines = ["Billing support on it."]
     if customer:
         lines.append(
             f"Account {customer.get('id')} ({customer.get('email', 'no email on file')}) noted."
         )
-    if ticket_created:
-        lines.append("Created a high-priority ticket so our team can process this immediately.")
-    if flags.get("is_urgent"):
-        lines.append("We've marked this as urgent and will review recent charges for duplicates.")
+    if billing_issue:
+        lines.append(f"Issue details: {billing_issue}")
     lines.append(f"Request: {request}")
     lines.append("Next steps: we'll verify the transactions, apply necessary refunds, and confirm once resolved.")
 
