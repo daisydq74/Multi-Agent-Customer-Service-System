@@ -16,6 +16,19 @@ class DatabaseSetup:
         self.conn = None
         self.cursor = None
 
+    def initialize(self):
+        """Create database schema and seed sample data if empty."""
+
+        self.connect()
+        self.create_tables()
+        self.create_triggers()
+
+        self.cursor.execute("SELECT COUNT(*) FROM customers")
+        if self.cursor.fetchone()[0] == 0:
+            self.insert_sample_data()
+
+        self.close()
+
     def connect(self):
         """Establish database connection."""
         self.conn = sqlite3.connect(self.db_path)
