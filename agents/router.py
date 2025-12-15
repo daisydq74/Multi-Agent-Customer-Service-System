@@ -19,7 +19,6 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict
 import httpx
 from fastapi import FastAPI
 from langgraph.graph import END, START, StateGraph
-from openai import AsyncOpenAI
 
 from langgraph_sdk.types import AgentCard, AgentCapabilities, AgentProvider, AgentSkill, Message, MessageSendParams, Role, Task
 from shared.a2a_handler import SimpleAgentRequestHandler, register_agent_routes
@@ -33,7 +32,7 @@ MAX_PLAN_STEPS = 5
 MAX_CUSTOMERS = 12
 
 
-_openai_client: Optional[AsyncOpenAI] = None
+_openai_client = None
 
 
 class PlanStep(TypedDict, total=False):
@@ -132,6 +131,8 @@ async def call_billing(context: Dict[str, Any], logs: List[str]) -> str:
 
 async def _plan_with_llm(user_text: str, parsed: Dict[str, Any]) -> Optional[Plan]:
     client = _get_openai_client()
+    if client is None:
+        return None
     instructions = (
         "You are a planner that decides which specialist agents to call for a customer message. "
         "Agents: \n"
@@ -196,10 +197,15 @@ def _fallback_plan(user_text: str, parsed: Dict[str, Any]) -> Plan:
     }
 
 
-def _get_openai_client() -> AsyncOpenAI:
+def _get_openai_client():
     global _openai_client
-    if _openai_client is None:
-        _openai_client = AsyncOpenAI(http_client=httpx.AsyncClient())
+    if _openai_client is not None:
+        return _openai_client
+    try:
+        from openai import AsyncOpenAI  # type: ignore
+    except Exception:
+        return None
+    _openai_client = AsyncOpenAI(http_client=httpx.AsyncClient())
     return _openai_client
 
 
@@ -365,6 +371,8 @@ async def _compose_fallback(state: RouterState) -> str:
 
 async def _compose_with_llm(state: RouterState) -> Optional[str]:
     client = _get_openai_client()
+    if client is None:
+        return None
     plan = state.get("plan", {})
     summary_bits: List[str] = []
     if state.get("data_context"):
